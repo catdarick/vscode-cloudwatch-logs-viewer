@@ -1,0 +1,71 @@
+{
+  "name": "cloudwatch-extension",
+  "displayName": "CloudWatch Logs Viewer",
+  "description": "View and query AWS CloudWatch Logs Insights directly inside VS Code with a time range selector and saved queries.",
+  "version": "0.0.1",
+  "publisher": "your-publisher-id",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:cloudwatchLogsViewer.open"
+  ],
+  "main": "dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cloudwatchLogsViewer.open",
+        "title": "CloudWatch Logs: Open Viewer"
+      },
+      {
+        "command": "cloudwatchLogsViewer.runQuery",
+        "title": "CloudWatch Logs: Run Last Query"
+      },
+      {
+        "command": "cloudwatchLogsViewer.saveQuery",
+        "title": "CloudWatch Logs: Save Current Query"
+      }
+    ],
+    "configuration": {
+      "title": "CloudWatch Logs Viewer",
+      "properties": {
+        "cloudwatchLogsViewer.defaultRegion": {
+          "type": "string",
+            "default": "us-east-2",
+            "description": "Default AWS region for CloudWatch Logs queries."
+        },
+        "cloudwatchLogsViewer.queryPollIntervalMs": {
+          "type": "number",
+          "default": 1000,
+          "description": "Polling interval in milliseconds for CloudWatch Logs Insights query status."
+        },
+        "cloudwatchLogsViewer.queryTimeoutMs": {
+          "type": "number",
+          "default": 60000,
+          "description": "Maximum time in milliseconds to wait for a query to complete before aborting."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "package": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "lint": "eslint src --ext .ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/vscode": "^1.90.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.0",
+    "esbuild": "^0.21.4"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudwatch-logs": "^3.614.0",
+    "uuid": "^9.0.1"
+  }
+}

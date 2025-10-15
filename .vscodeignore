@@ -1,0 +1,8 @@
+**/tsconfig.json
+**/tsconfig.*.json
+**/.eslintrc.*
+**/.gitignore
+**/node_modules/@types/**
+**/src/**
+**/*.map
+out/**
