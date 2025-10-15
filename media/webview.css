@@ -492,12 +492,76 @@ h2 .count {
   min-width: 550px;
 }
 
+.datetime-group {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.datetime-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.field-label {
+  font-size: 0.65rem;
+  color: var(--vscode-descriptionForeground);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.datetime-inputs {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.date-input {
+  width: 130px;
+  font-size: 0.7rem;
+  padding: 0.3rem 0.4rem;
+}
+
+.time-input {
+  width: 100px;
+  font-size: 0.7rem;
+  padding: 0.3rem 0.4rem;
+}
+
+.icon-btn {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border: 1px solid var(--vscode-button-border);
+  padding: 0.3rem 0.5rem;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.65rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.icon-btn:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+  border-color: var(--vscode-focusBorder);
+}
+
+.copy-btn {
+  font-size: 1rem;
+  padding: 0.3rem 0.6rem;
+  margin-bottom: 2px;
+}
+
 .time-zone-label {
   font-size: 0.65rem;
   color: var(--vscode-descriptionForeground);
   opacity: 0.8;
   font-weight: 500;
   margin-left: 0.25rem;
+  align-self: flex-end;
+  margin-bottom: 0.35rem;
 }
 
 .inline-label {

@@ -42,6 +42,11 @@ document.getElementById('searchPrevBtn').addEventListener('click', navigateSearc
 document.getElementById('searchNextBtn').addEventListener('click', navigateSearchNext);
 document.getElementById('searchHideNonMatching').addEventListener('change', () => searchResults(true));
 
+// Absolute time helper buttons
+document.getElementById('startNowBtn').addEventListener('click', () => setDateTimeToNow('start'));
+document.getElementById('endNowBtn').addEventListener('click', () => setDateTimeToNow('end'));
+document.getElementById('copyStartToEnd').addEventListener('click', copyStartToEnd);
+
 // Time mode toggle - segmented control
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -50,6 +55,23 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
     toggleTimeMode();
   });
 });
+
+// Set max date/time to prevent future dates
+function updateDateTimeMax() {
+  const now = new Date();
+  const maxDate = now.toISOString().slice(0, 10); // YYYY-MM-DD
+  const maxTime = now.toISOString().slice(11, 19); // HH:mm:ss
+  
+  document.getElementById('startDate').max = maxDate;
+  document.getElementById('endDate').max = maxDate;
+  document.getElementById('startTime').max = maxTime;
+  document.getElementById('endTime').max = maxTime;
+}
+
+// Initialize and update max constraints
+updateDateTimeMax();
+// Update every minute to keep max time current
+setInterval(updateDateTimeMax, 60000);
 
 // Query editor syntax highlighting
 const queryEditor = document.getElementById('query');
@@ -75,6 +97,27 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Functions
+function setDateTimeToNow(which) {
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+  const timeStr = now.toISOString().slice(11, 19); // HH:mm:ss
+  
+  if (which === 'start') {
+    document.getElementById('startDate').value = dateStr;
+    document.getElementById('startTime').value = timeStr;
+  } else {
+    document.getElementById('endDate').value = dateStr;
+    document.getElementById('endTime').value = timeStr;
+  }
+}
+
+function copyStartToEnd() {
+  const startDate = document.getElementById('startDate').value;
+  const startTime = document.getElementById('startTime').value;
+  document.getElementById('endDate').value = startDate;
+  document.getElementById('endTime').value = startTime;
+}
+
 function toggleTimeMode() {
   const activeBtn = document.querySelector('.mode-btn.active');
   const mode = activeBtn ? activeBtn.dataset.mode : 'relative';
@@ -95,12 +138,18 @@ function currentTimeRange() {
   const mode = activeBtn ? activeBtn.dataset.mode : 'relative';
   
   if (mode === 'absolute') {
-    const start = document.getElementById('customStart').value;
-    const end = document.getElementById('customEnd').value;
-    // datetime-local values are in format YYYY-MM-DDTHH:mm, treated as UTC
+    const startDate = document.getElementById('startDate').value;
+    const startTime = document.getElementById('startTime').value;
+    const endDate = document.getElementById('endDate').value;
+    const endTime = document.getElementById('endTime').value;
+    
+    // Combine date and time, treat as UTC
+    const startStr = startDate && startTime ? `${startDate}T${startTime}Z` : null;
+    const endStr = endDate && endTime ? `${endDate}T${endTime}Z` : null;
+    
     return { 
-      start: start ? new Date(start + 'Z').getTime() : Date.now() - 60 * 60 * 1000, 
-      end: end ? new Date(end + 'Z').getTime() : Date.now() 
+      start: startStr ? new Date(startStr).getTime() : Date.now() - 60 * 60 * 1000, 
+      end: endStr ? new Date(endStr).getTime() : Date.now() 
     };
   } else {
     const val = parseInt(timeRangeSelect.value, 10);

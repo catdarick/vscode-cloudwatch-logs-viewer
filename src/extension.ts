@@ -240,9 +240,26 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
               <label class="inline-label relative-time">
                 <select id="timeRange"></select>
               </label>
-              <label class="inline-label absolute-time">Start: <input type="datetime-local" id="customStart" /></label>
-              <label class="inline-label absolute-time">End: <input type="datetime-local" id="customEnd" /></label>
-              <span class="time-zone-label absolute-time">(UTC)</span>
+              <div class="absolute-time datetime-group">
+                <div class="datetime-field">
+                  <label class="field-label">Start</label>
+                  <div class="datetime-inputs">
+                    <input type="date" id="startDate" class="date-input" />
+                    <input type="time" id="startTime" class="time-input" step="1" />
+                    <button class="icon-btn" id="startNowBtn" title="Set to now">Now</button>
+                  </div>
+                </div>
+                <button class="icon-btn copy-btn" id="copyStartToEnd" title="Copy start to end">→</button>
+                <div class="datetime-field">
+                  <label class="field-label">End</label>
+                  <div class="datetime-inputs">
+                    <input type="date" id="endDate" class="date-input" />
+                    <input type="time" id="endTime" class="time-input" step="1" />
+                    <button class="icon-btn" id="endNowBtn" title="Set to now">Now</button>
+                  </div>
+                </div>
+                <span class="time-zone-label">(UTC)</span>
+              </div>
             </div>
             <button id="runBtn" class="primary-btn">▶ Run Query</button>
           </div>
