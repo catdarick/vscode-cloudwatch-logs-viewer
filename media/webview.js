@@ -572,6 +572,8 @@ function renderResults(payload) {
     container.innerHTML = '';
     // Results changed – invalidate any cached row references used by search
     invalidateRowCache();
+    // Clear column filters when new results are loaded
+    clearAllFilters();
 
     // Filter out hidden fields (server can send metadata) default to @ptr only
     const hidden = Array.isArray(payload.hiddenFields) ? payload.hiddenFields : ['@ptr'];
@@ -596,10 +598,28 @@ function renderResults(payload) {
     fields.forEach((f, index) => {
         const th = document.createElement('th');
         th.style.position = 'relative';
+        th.dataset.field = f;
+
+        const headerContent = document.createElement('div');
+        headerContent.className = 'th-content';
 
         const span = document.createElement('span');
         span.textContent = f;
-        th.appendChild(span);
+        headerContent.appendChild(span);
+
+        // Add filter button
+        const filterBtn = document.createElement('button');
+        filterBtn.type = 'button';
+        filterBtn.className = 'column-filter-btn';
+        filterBtn.title = `Filter ${f}`;
+        filterBtn.innerHTML = '⋮';
+        filterBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showColumnFilter(f, filterBtn);
+        });
+        headerContent.appendChild(filterBtn);
+
+        th.appendChild(headerContent);
 
         // Add resize handle (not on last column; account for extra expand column)
         if (index < fields.length - 1) {
@@ -682,6 +702,286 @@ function stopColumnResize() {
     document.removeEventListener('mouseup', stopColumnResize);
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
+}
+
+// Column filtering functionality
+let activeFilters = {}; // { fieldName: Set(selectedValues) }
+let currentFilterModal = null;
+
+function showColumnFilter(fieldName, buttonElement) {
+    // Close existing modal if any
+    if (currentFilterModal) {
+        currentFilterModal.remove();
+        currentFilterModal = null;
+        return;
+    }
+
+    // Get all distinct values from this column
+    const valueCountMap = getColumnValueCounts(fieldName);
+    
+    // Sort by count descending
+    const sortedValues = Array.from(valueCountMap.entries())
+        .sort((a, b) => b[1] - a[1]);
+
+    // Create modal
+    const modal = document.createElement('div');
+    modal.className = 'column-filter-modal';
+    currentFilterModal = modal;
+
+    // Position modal near the button
+    const rect = buttonElement.getBoundingClientRect();
+    modal.style.position = 'fixed';
+    modal.style.top = `${rect.bottom + 5}px`;
+    modal.style.left = `${rect.left - 150}px`; // offset to align better
+
+    // Modal content
+    const header = document.createElement('div');
+    header.className = 'filter-modal-header';
+    header.textContent = `Filter: ${fieldName}`;
+    modal.appendChild(header);
+
+    // Search input for filtering the values list
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.className = 'filter-search-input';
+    searchInput.placeholder = 'Search values...';
+    modal.appendChild(searchInput);
+
+    // Values list container
+    const valuesList = document.createElement('div');
+    valuesList.className = 'filter-values-list';
+    
+    const renderValuesList = (filterText = '') => {
+        valuesList.innerHTML = '';
+        const lowerFilter = filterText.toLowerCase();
+        const filtered = sortedValues.filter(([value]) => 
+            value.toLowerCase().includes(lowerFilter)
+        );
+
+        if (filtered.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'filter-value-empty';
+            empty.textContent = 'No matching values';
+            valuesList.appendChild(empty);
+            return;
+        }
+
+        filtered.forEach(([value, count]) => {
+            const item = document.createElement('div');
+            item.className = 'filter-value-item';
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.id = `filter-${fieldName}-${value}`;
+            
+            // Check if this value is currently filtered
+            const fieldFilters = activeFilters[fieldName];
+            checkbox.checked = !fieldFilters || fieldFilters.has(value);
+            
+            checkbox.addEventListener('change', () => {
+                toggleFilterValue(fieldName, value);
+            });
+
+            const label = document.createElement('label');
+            label.htmlFor = checkbox.id;
+            label.className = 'filter-value-label';
+            
+            const valueSpan = document.createElement('span');
+            valueSpan.className = 'filter-value-text';
+            valueSpan.textContent = value || '(empty)';
+            
+            const countSpan = document.createElement('span');
+            countSpan.className = 'filter-value-count';
+            countSpan.textContent = count;
+
+            label.appendChild(valueSpan);
+            label.appendChild(countSpan);
+
+            item.appendChild(checkbox);
+            item.appendChild(label);
+            valuesList.appendChild(item);
+        });
+    };
+
+    renderValuesList();
+    searchInput.addEventListener('input', (e) => {
+        renderValuesList(e.target.value);
+    });
+
+    modal.appendChild(valuesList);
+
+    // Action buttons
+    const actions = document.createElement('div');
+    actions.className = 'filter-modal-actions';
+
+    const selectAllBtn = document.createElement('button');
+    selectAllBtn.textContent = 'Select All';
+    selectAllBtn.className = 'filter-action-btn';
+    selectAllBtn.addEventListener('click', () => {
+        delete activeFilters[fieldName];
+        renderValuesList(searchInput.value);
+        applyColumnFilters();
+        updateFilterIndicators();
+    });
+
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = 'Clear';
+    clearBtn.className = 'filter-action-btn';
+    clearBtn.addEventListener('click', () => {
+        activeFilters[fieldName] = new Set();
+        renderValuesList(searchInput.value);
+        applyColumnFilters();
+        updateFilterIndicators();
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Close';
+    closeBtn.className = 'filter-action-btn filter-close-btn';
+    closeBtn.addEventListener('click', () => {
+        modal.remove();
+        currentFilterModal = null;
+    });
+
+    actions.appendChild(selectAllBtn);
+    actions.appendChild(clearBtn);
+    actions.appendChild(closeBtn);
+    modal.appendChild(actions);
+
+    document.body.appendChild(modal);
+
+    // Close modal when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', handleOutsideClick);
+    }, 0);
+
+    function handleOutsideClick(e) {
+        if (!modal.contains(e.target) && !buttonElement.contains(e.target)) {
+            modal.remove();
+            currentFilterModal = null;
+            document.removeEventListener('click', handleOutsideClick);
+        }
+    }
+
+    searchInput.focus();
+}
+
+function getColumnValueCounts(fieldName) {
+    const valueCountMap = new Map();
+    const rows = document.querySelectorAll('#results tbody tr:not(.detail-row)');
+    
+    rows.forEach(row => {
+        const cell = row.querySelector(`td[data-field="${fieldName}"]`);
+        if (cell) {
+            const value = cell.textContent.trim();
+            valueCountMap.set(value, (valueCountMap.get(value) || 0) + 1);
+        }
+    });
+
+    return valueCountMap;
+}
+
+function toggleFilterValue(fieldName, value) {
+    if (!activeFilters[fieldName]) {
+        // First filter on this column - start with all values except this one
+        const allValues = new Set();
+        const rows = document.querySelectorAll('#results tbody tr:not(.detail-row)');
+        rows.forEach(row => {
+            const cell = row.querySelector(`td[data-field="${fieldName}"]`);
+            if (cell) {
+                allValues.add(cell.textContent.trim());
+            }
+        });
+        activeFilters[fieldName] = allValues;
+    }
+
+    const fieldFilters = activeFilters[fieldName];
+    if (fieldFilters.has(value)) {
+        fieldFilters.delete(value);
+    } else {
+        fieldFilters.add(value);
+    }
+
+    // If all values are selected, remove the filter
+    const totalValues = getColumnValueCounts(fieldName).size;
+    if (fieldFilters.size === totalValues) {
+        delete activeFilters[fieldName];
+    }
+
+    applyColumnFilters();
+    updateFilterIndicators();
+}
+
+function applyColumnFilters() {
+    const rows = document.querySelectorAll('#results tbody tr:not(.detail-row)');
+    
+    rows.forEach(row => {
+        let shouldShow = true;
+
+        // Check each active filter
+        for (const [fieldName, allowedValues] of Object.entries(activeFilters)) {
+            if (allowedValues.size === 0) {
+                shouldShow = false;
+                break;
+            }
+
+            const cell = row.querySelector(`td[data-field="${fieldName}"]`);
+            if (cell) {
+                const value = cell.textContent.trim();
+                if (!allowedValues.has(value)) {
+                    shouldShow = false;
+                    break;
+                }
+            }
+        }
+
+        if (shouldShow) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+            // Also hide associated detail row if expanded
+            const detailRow = row.nextElementSibling;
+            if (detailRow && detailRow.classList.contains('detail-row')) {
+                detailRow.style.display = 'none';
+            }
+        }
+    });
+
+    updateFilteredRowCount();
+}
+
+function updateFilterIndicators() {
+    const headers = document.querySelectorAll('#results thead th[data-field]');
+    
+    headers.forEach(th => {
+        const fieldName = th.dataset.field;
+        const filterBtn = th.querySelector('.column-filter-btn');
+        
+        if (filterBtn) {
+            if (activeFilters[fieldName]) {
+                filterBtn.classList.add('active');
+            } else {
+                filterBtn.classList.remove('active');
+            }
+        }
+    });
+}
+
+function updateFilteredRowCount() {
+    const totalRows = document.querySelectorAll('#results tbody tr:not(.detail-row)').length;
+    const visibleRows = document.querySelectorAll('#results tbody tr:not(.detail-row):not([style*="display: none"])').length;
+    
+    const resultCount = document.getElementById('resultCount');
+    if (totalRows !== visibleRows) {
+        resultCount.textContent = `(${visibleRows} of ${totalRows} rows)`;
+    } else {
+        resultCount.textContent = `(${totalRows} rows)`;
+    }
+}
+
+function clearAllFilters() {
+    activeFilters = {};
+    applyColumnFilters();
+    updateFilterIndicators();
 }
 
 function loadLogGroups() {
