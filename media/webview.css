@@ -186,6 +186,9 @@ h2 .count {
   font-style: italic;
 }
 
+/* Hidden rows for search filtering (class toggled instead of inline style.display for performance) */
+tr.row-hidden { display: none !important; }
+
 /* LOG GROUPS PANEL (in main area) */
 .log-groups-panel {
   background: var(--vscode-editor-background);
@@ -777,6 +780,31 @@ button:hover {
   font-weight: 600;
 }
 
+/* Run Query button with spinner */
+#runBtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 34px;
+}
+#runBtn .run-btn-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: var(--vscode-button-foreground);
+  border-radius: 50%;
+  animation: run-spin 0.8s linear infinite;
+  display: none;
+}
+#runBtn[data-state="running"] .run-btn-spinner {
+  display: inline-block;
+}
+#runBtn[data-state="running"] .run-btn-icon {
+  display: none;
+}
+@keyframes run-spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
+
 .query-controls-sidebar .primary-btn {
   width: 100%;
 }
@@ -814,6 +842,25 @@ button:hover {
   display: flex;
   gap: 0.35rem;
   align-items: center;
+}
+
+/* Search spinner */
+.search-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--vscode-editorWidget-border);
+  border-top-color: var(--vscode-progressBar-background);
+  border-radius: 50%;
+  animation: cw-spin 0.8s linear infinite;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.search-spinner.active {
+  opacity: 1;
+}
+@keyframes cw-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .search-controls input[type="text"] {

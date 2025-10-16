@@ -13,7 +13,8 @@ type WebviewInMessage =
   | { type: 'listLogGroups'; region?: string; prefix?: string }
   | { type: 'getFavorites' }
   | { type: 'addFavorite'; data: FavoriteLogGroup }
-  | { type: 'removeFavorite'; name: string; region: string };
+  | { type: 'removeFavorite'; name: string; region: string }
+  | { type: 'debugLog'; message: string };
 
 // Outgoing messages (subset typed for clarity)
 type WebviewOutMessage =
@@ -64,6 +65,13 @@ function openPanel(context: vscode.ExtensionContext) {
       case 'runQuery':
         await handleRunQuery(msg.data, context);
         break;
+      case 'debugLog': {
+        if (!outputChannel) {
+          outputChannel = vscode.window.createOutputChannel('CloudWatch Logs Queries');
+        }
+        const ts = new Date().toISOString();
+        outputChannel.appendLine(`[debug ${ts}] ${msg.message}`);
+        break; }
       case 'getSavedQueries': {
         // Legacy local queries request -> treat as AWS-backed first, fallback to local
         const config = vscode.workspace.getConfiguration();
@@ -316,7 +324,11 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
               </div>
               </div>
             </div>
-            <button id="runBtn" class="primary-btn">▶ Run Query</button>
+            <button id="runBtn" class="primary-btn" data-state="idle">
+              <span class="run-btn-icon" aria-hidden="true">▶</span>
+              <span class="run-btn-spinner" aria-hidden="true"></span>
+              <span class="run-btn-label">Run Query</span>
+            </button>
           </div>
         </div>
       </section>
@@ -330,6 +342,7 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
               <span>Hide non-matching</span>
             </label>
             <input id="searchInput" placeholder="Search in results (Ctrl+F)..." />
+            <span id="searchSpinner" class="search-spinner" title="Searching" aria-hidden="true"></span>
             <button id="searchPrevBtn" title="Previous match">▲</button>
             <button id="searchNextBtn" title="Next match">▼</button>
             <button id="searchClearBtn" title="Clear search">✕</button>
