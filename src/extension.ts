@@ -342,9 +342,17 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
                   <button class="mode-btn" data-mode="absolute">Absolute</button>
                 </div>
                 <div class="time-inputs-container">
-              <label class="inline-label relative-time">
-                <select id="timeRange"></select>
-              </label>
+              <div class="relative-time">
+                <div class="relative-time-row">
+                  <span class="relative-label">Last</span>
+                  <input type="number" id="relativeValue" class="relative-value-input" value="1" min="1" />
+                  <div class="unit-toggle">
+                    <button class="unit-btn active" data-unit="minutes">minutes</button>
+                    <button class="unit-btn" data-unit="hours">hours</button>
+                    <button class="unit-btn" data-unit="days">days</button>
+                  </div>
+                </div>
+              </div>
               <div class="absolute-time datetime-group">
                 <div class="datetime-field">
                   <label class="field-label">Start</label>

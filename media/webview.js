@@ -30,28 +30,9 @@ let currentResults = [];
 let savedQueries = [];
 let savedQueriesSource = 'aws';
 
-// Time range options
-const timeRangeSelect = document.getElementById('timeRange');
-const ranges = [
-    { label: 'Last 5 minutes', ms: 5 * 60 * 1000 },
-    { label: 'Last 15 minutes', ms: 15 * 60 * 1000 },
-    { label: 'Last 30 minutes', ms: 30 * 60 * 1000 },
-    { label: 'Last 1 hour', ms: 60 * 60 * 1000 },
-    { label: 'Last 3 hours', ms: 3 * 60 * 60 * 1000 },
-    { label: 'Last 12 hours', ms: 12 * 60 * 60 * 1000 },
-    { label: 'Last 24 hours', ms: 24 * 60 * 60 * 1000 },
-    { label: 'Last 3 days', ms: 3 * 24 * 60 * 60 * 1000 },
-    { label: 'Last 7 days', ms: 7 * 24 * 60 * 60 * 1000 },
-    { label: 'Last 30 days', ms: 30 * 24 * 60 * 60 * 1000 }
-];
-
-ranges.forEach(r => {
-    const opt = document.createElement('option');
-    opt.value = String(r.ms);
-    opt.textContent = r.label;
-    timeRangeSelect.appendChild(opt);
-});
-timeRangeSelect.value = String(ranges[3].ms); // default 1h
+// Relative time state
+let relativeValue = 1;
+let relativeUnit = 'hours'; // 'minutes', 'hours', 'days'
 
 // Event listeners
 document.getElementById('runBtn').addEventListener('click', runQuery);
@@ -98,6 +79,19 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
         document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         toggleTimeMode();
+    });
+});
+
+// Relative time controls
+document.getElementById('relativeValue').addEventListener('input', (e) => {
+    relativeValue = Math.max(1, parseInt(e.target.value, 10) || 1);
+});
+
+document.querySelectorAll('.unit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.unit-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        relativeUnit = btn.dataset.unit;
     });
 });
 
@@ -206,8 +200,14 @@ function currentTimeRange() {
             end: endStr ? new Date(endStr).getTime() : Date.now()
         };
     } else {
-        const val = parseInt(timeRangeSelect.value, 10);
-        return { start: Date.now() - val, end: Date.now() };
+        // Calculate milliseconds from relative value and unit
+        const unitMultipliers = {
+            minutes: 60 * 1000,
+            hours: 60 * 60 * 1000,
+            days: 24 * 60 * 60 * 1000
+        };
+        const ms = relativeValue * (unitMultipliers[relativeUnit] || unitMultipliers.hours);
+        return { start: Date.now() - ms, end: Date.now() };
     }
 }
 

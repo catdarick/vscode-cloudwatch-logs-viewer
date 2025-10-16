@@ -444,6 +444,81 @@ tr.row-hidden { display: none !important; }
   flex-direction: column;
   gap: 0.35rem;
   align-items: stretch;
+  justify-content: center;
+  flex: 1;
+}
+
+.relative-time {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.relative-time-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.relative-label {
+  font-size: 0.8rem;
+  color: var(--vscode-foreground);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.relative-value-input {
+  width: 70px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.8rem;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.relative-value-input:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+.unit-toggle {
+  display: flex;
+  flex-direction: column;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.unit-toggle .unit-btn {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.unit-toggle .unit-btn:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.unit-toggle .unit-btn.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .absolute-time {
