@@ -978,6 +978,41 @@ mark.search-highlight.current-match {
   box-shadow: 0 0 0 1px var(--vscode-editor-findMatchBorder, var(--vscode-focusBorder));
 }
 
+/* Expandable log row details */
+th.expand-col-header { width: 34px; }
+td.expand-cell { padding: 0.15rem 0.25rem; vertical-align: middle; }
+.expand-btn {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border: 1px solid var(--vscode-button-border);
+  padding: 0 0.4rem;
+  font-size: 0.65rem;
+  border-radius: 4px;
+  cursor: pointer;
+  height: 22px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+}
+.expand-btn:hover { background: var(--vscode-button-secondaryHoverBackground); border-color: var(--vscode-focusBorder); }
+.expand-btn:active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.detail-row td { background: var(--vscode-editor-background); }
+.detail-row pre.detail-json {
+  margin: 0.35rem 0 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 4px;
+  max-height: 300px;
+  overflow: auto;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  font-family: 'Monaco','Menlo','Courier New',monospace;
+  white-space: pre;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 10px;

@@ -323,6 +323,76 @@ function escapeHtml(text) {
         .replace(/'/g, '&#039;');
 }
 
+// JSON syntax highlight (simple, aligns with existing token colors) for expanded log row details
+function jsonToHighlightedHtml(obj) {
+    let jsonStr;
+    try { jsonStr = JSON.stringify(obj, null, 2); } catch { jsonStr = String(obj); }
+    const esc = escapeHtml(jsonStr);
+    // Regex based tokenization: keys, strings, numbers, booleans, null
+    return esc
+        .replace(/(&quot;.*?&quot;)(?=\s*:)/g, '<span class="token-field">$1</span>') // keys
+        .replace(/:&nbsp;?(&quot;.*?&quot;)/g, ': <span class="token-string">$1</span>')
+        .replace(/(&quot;.*?&quot;)/g, '<span class="token-string">$1</span>') // any remaining strings
+        .replace(/\b(true|false)\b/g, '<span class="token-operator">$1</span>')
+        .replace(/\b(null)\b/g, '<span class="token-operator">$1</span>')
+        .replace(/(-?\b\d+(?:\.\d+)?\b)/g, '<span class="token-number">$1</span>');
+}
+
+function buildRowDetailObject(rowData) {
+    const obj = {};
+    // rowData.fields : [{ field, value }]
+    rowData.fields.forEach(f => { if (f.field !== '@ptr') obj[f.field] = f.value; });
+    return obj;
+}
+
+function toggleRowDetails(tr, rowData) {
+    const already = tr.nextSibling && tr.nextSibling.classList && tr.nextSibling.classList.contains('detail-row');
+    const expandBtn = tr.querySelector('.expand-btn');
+    if (already) {
+        tr.parentNode.removeChild(tr.nextSibling);
+        if (expandBtn) { expandBtn.textContent = '›'; expandBtn.title = 'Show details'; }
+        return;
+    }
+    // Build detail row
+    const detailTr = document.createElement('tr');
+    detailTr.className = 'detail-row';
+    const td = document.createElement('td');
+    td.colSpan = tr.children.length; // span across all columns
+    const pre = document.createElement('pre');
+    pre.className = 'detail-json';
+    // Only show the @message field content (raw) for clarity
+    const messageField = rowData.fields.find(f => f.field === '@message');
+    const messageValue = messageField ? messageField.value : '(no @message)';
+    // Detect JSON structure (object or array). Try to parse & pretty print with highlighting.
+    let rendered = null;
+    if (messageValue && /^(\s*[\[{])/.test(messageValue)) {
+        try {
+            const parsed = JSON.parse(messageValue);
+            rendered = jsonToHighlightedHtml(parsed);
+        } catch (_) { /* fall back to plain text */ }
+    }
+    if (rendered) {
+        pre.innerHTML = rendered; // already escaped + tokenized in helper
+    } else {
+        pre.textContent = messageValue || '';
+    }
+    td.appendChild(pre);
+    detailTr.appendChild(td);
+    tr.parentNode.insertBefore(detailTr, tr.nextSibling);
+    if (expandBtn) { expandBtn.textContent = '⌄'; expandBtn.title = 'Hide details'; }
+}
+
+// Collapse detail row (if present) for a given main data row
+function collapseRowDetail(tr) {
+    if (!tr || !tr.parentNode) return;
+    const expandBtn = tr.querySelector('.expand-btn');
+    const next = tr.nextSibling;
+    if (next && next.classList && next.classList.contains('detail-row')) {
+        tr.parentNode.removeChild(next);
+        if (expandBtn) { expandBtn.textContent = '›'; expandBtn.title = 'Show details'; }
+    }
+}
+
 // Syntax highlighting for CloudWatch Logs Insights
 const KEYWORDS = ['fields', 'filter', 'sort', 'stats', 'limit', 'display', 'parse', 'by', 'as', 'asc', 'desc', 'dedup', 'head', 'tail'];
 const FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'earliest', 'latest', 'pct', 'stddev', 'concat', 'strlen', 'toupper', 'tolower', 'trim', 'ltrim', 'rtrim', 'contains', 'replace', 'strcontains', 'ispresent', 'isblank', 'isempty', 'isnull', 'coalesce', 'bin', 'diff', 'floor', 'ceil', 'abs', 'log', 'sqrt', 'exp'];
@@ -389,8 +459,9 @@ function renderResults(payload) {
     // Results changed – invalidate any cached row references used by search
     invalidateRowCache();
 
-    // Filter out @ptr column
-    const fields = payload.fieldOrder.filter(f => f !== '@ptr');
+    // Filter out hidden fields (server can send metadata) default to @ptr only
+    const hidden = Array.isArray(payload.hiddenFields) ? payload.hiddenFields : ['@ptr'];
+    const fields = payload.fieldOrder.filter(f => !hidden.includes(f));
 
     if (!payload.rows.length) {
         container.textContent = 'No results.';
@@ -403,6 +474,11 @@ function renderResults(payload) {
     const table = document.createElement('table');
     const head = document.createElement('thead');
     const headerRow = document.createElement('tr');
+    // Expand column header (blank)
+    const expandHeader = document.createElement('th');
+    expandHeader.className = 'expand-col-header';
+    expandHeader.style.width = '34px';
+    headerRow.appendChild(expandHeader);
     fields.forEach((f, index) => {
         const th = document.createElement('th');
         th.style.position = 'relative';
@@ -411,7 +487,7 @@ function renderResults(payload) {
         span.textContent = f;
         th.appendChild(span);
 
-        // Add resize handle (not on last column)
+        // Add resize handle (not on last column; account for extra expand column)
         if (index < fields.length - 1) {
             const resizer = document.createElement('div');
             resizer.className = 'column-resizer';
@@ -428,6 +504,19 @@ function renderResults(payload) {
     payload.rows.forEach((r, idx) => {
         const tr = document.createElement('tr');
         tr.dataset.rowIndex = idx;
+
+        // Expand cell
+        const expandCell = document.createElement('td');
+        expandCell.className = 'expand-cell';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'expand-btn';
+        btn.title = 'Show details';
+        btn.textContent = '›';
+        btn.addEventListener('click', () => toggleRowDetails(tr, r));
+        expandCell.appendChild(btn);
+        tr.appendChild(expandCell);
+
         fields.forEach(f => {
             const td = document.createElement('td');
             const valObj = r.fields.find(x => x.field === f);
@@ -728,7 +817,9 @@ function invalidateRowCache() { rowCache = null; resetSearchState(); }
 function buildRowCache() {
     if (rowCache) return rowCache;
     const rows = document.querySelectorAll('#results tbody tr');
-    rowCache = Array.from(rows).map(row => {
+    rowCache = Array.from(rows)
+        .filter(row => !row.classList.contains('detail-row')) // exclude expanded JSON detail rows from search indexing
+        .map(row => {
         const cells = Array.from(row.querySelectorAll('td')).map(td => {
             const original = td.dataset.originalText || td.textContent || '';
             if (!td.dataset.originalText) td.dataset.originalText = original; // persist for restore
@@ -843,6 +934,7 @@ function searchResults(preservePosition = false, force = false) {
             const { rowEl, cells, combinedLower } = entry;
             if (!combinedLower.includes(lowerTerm)) {
                 if (hideNonMatching) rowEl.classList.add('row-hidden'); else rowEl.classList.remove('row-hidden');
+                if (hideNonMatching && rowEl.classList.contains('row-hidden')) collapseRowDetail(rowEl); // ensure detail collapses when hidden
                 entry.cells.forEach(c => { if (c.el.querySelector && c.el.querySelector('mark.search-highlight')) c.el.textContent = c.original; });
                 entry.lastMatched = false;
             } else {
@@ -919,6 +1011,7 @@ function toggleHideNonMatching() {
     rowCache.forEach(entry => {
         const shouldHide = hide && !entry.lastMatched;
         if (shouldHide) entry.rowEl.classList.add('row-hidden'); else entry.rowEl.classList.remove('row-hidden');
+        if (shouldHide) collapseRowDetail(entry.rowEl);
     });
     // After applying visibility changes, if the active match row was hidden (shouldn't be if lastMatched), ensure it's shown and scrolled
     if (activeMatchEl && activeMatchEl.classList.contains('row-hidden')) {

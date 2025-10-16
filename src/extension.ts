@@ -200,17 +200,24 @@ async function handleRunQuery(data: { logGroups: string[]; region?: string; quer
       outputChannel.appendLine('---');
       // Don't show/focus the output channel automatically
     }
+    // Possibly augment query to ensure we retrieve @message for detail expansion use
+    const augmentation = ensureMessageField(data.query);
+    if (augmentation.modified) {
+      outputChannel?.appendLine('[info] @message field auto-injected (hidden from columns).');
+    }
     post({ type: 'queryStatus', data: { status: 'Running' } });
     const result = await runInsightsQuery({
       logGroupNames: data.logGroups,
-      queryString: data.query,
+      queryString: augmentation.query,
       startTime,
       endTime,
       region,
       pollIntervalMs,
       timeoutMs,
     }, currentQueryAbortController.signal);
-    post({ type: 'queryResult', data: result });
+    // Attach hiddenFields metadata if we injected @message so webview can hide column but still show in detail
+    const hiddenFields = augmentation.modified ? ['@ptr', '@message'] : ['@ptr'];
+    post({ type: 'queryResult', data: { ...result, hiddenFields } });
   } catch (err: any) {
     if (err?.name === 'AbortError' || /aborted/i.test(err?.message)) {
       post({ type: 'queryStatus', data: { status: 'Aborted' } });
@@ -218,6 +225,42 @@ async function handleRunQuery(data: { logGroups: string[]; region?: string; quer
       post({ type: 'queryError', error: err.message || String(err) });
     }
   }
+}
+
+// Ensure the query selects @message so we have full text for expanded detail.
+// If user already requests @message explicitly we leave it alone.
+// Strategy: if a 'fields' clause exists, add @message if missing (prepend to preserve typical ordering with @timestamp first if present).
+// If no fields clause, prepend 'fields @message' line.
+function ensureMessageField(original: string): { query: string; modified: boolean } {
+  if (!original) return { query: original, modified: false };
+  const lower = original.toLowerCase();
+  if (/@message\b/i.test(original)) {
+    return { query: original, modified: false };
+  }
+  // Look for first fields clause
+  const fieldsMatch = /(^|\n)\s*fields\s+([^\n|]+)/i.exec(original);
+  if (fieldsMatch) {
+    const full = fieldsMatch[0];
+    const prefix = fieldsMatch[1];
+    const listPart = fieldsMatch[2];
+    // Insert @message after @timestamp if present, else at start
+    const hasTimestamp = /@timestamp\b/i.test(listPart);
+    let newList;
+    if (hasTimestamp) {
+      // Keep original order but ensure @message follows @timestamp
+      const parts = listPart.split(',').map(p => p.trim()).filter(p => p);
+      const tsIndex = parts.findIndex(p => /@timestamp\b/i.test(p));
+      parts.splice(tsIndex + 1, 0, '@message');
+      newList = parts.join(', ');
+    } else {
+      newList = '@message, ' + listPart.trim();
+    }
+    const replaced = original.replace(full, `${prefix}fields ${newList}`);
+    return { query: replaced, modified: true };
+  }
+  // No fields clause -> add one at top
+  const injected = `fields @message\n${original}`;
+  return { query: injected, modified: true };
 }
 
 async function mapAwsQueryDefinitions(region: string): Promise<SavedQuery[]> {
