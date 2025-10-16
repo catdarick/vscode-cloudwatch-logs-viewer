@@ -4,6 +4,29 @@ import { runInsightsQuery, listLogGroups, listQueryDefinitions, putQueryDefiniti
 interface SavedQuery { id: string; name: string; logGroups: string[]; query: string; }
 interface FavoriteLogGroup { name: string; region: string; }
 
+// Messages from webview -> extension
+type WebviewInMessage =
+  | { type: 'runQuery'; data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number } }
+  | { type: 'getSavedQueries'; region?: string }
+  | { type: 'saveQuery'; data: { id: string; name: string; query: string; logGroups: string[] }; region?: string }
+  | { type: 'deleteQuery'; id: string; region?: string }
+  | { type: 'listLogGroups'; region?: string; prefix?: string }
+  | { type: 'getFavorites' }
+  | { type: 'addFavorite'; data: FavoriteLogGroup }
+  | { type: 'removeFavorite'; name: string; region: string }
+  | { type: 'runFromCommand' }
+  | { type: 'saveFromCommand' };
+
+// Outgoing messages (subset typed for clarity)
+type WebviewOutMessage =
+  | { type: 'savedQueries'; data: SavedQuery[]; source: 'aws' | 'local'; error?: string; savedId?: string }
+  | { type: 'logGroupsList'; data: string[] }
+  | { type: 'logGroupsListError'; error: string }
+  | { type: 'favorites'; data: FavoriteLogGroup[] }
+  | { type: 'queryStatus'; data: { status: string } }
+  | { type: 'queryResult'; data: any }
+  | { type: 'queryError'; error: string };
+
 const SAVED_KEY = 'cloudwatchLogsViewer.savedQueries';
 const FAVORITES_KEY = 'cloudwatchLogsViewer.favoriteLogGroups';
 
@@ -24,6 +47,7 @@ export function deactivate() { }
 
 let panel: vscode.WebviewPanel | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
+let currentQueryAbortController: AbortController | undefined;
 
 function ensurePanel(context: vscode.ExtensionContext) {
   if (!panel) {
@@ -45,7 +69,7 @@ function openPanel(context: vscode.ExtensionContext) {
   });
   panel.onDidDispose(() => { panel = undefined; });
   panel.webview.html = getHtml(panel.webview, context.extensionUri);
-  panel.webview.onDidReceiveMessage(async (msg) => {
+  panel.webview.onDidReceiveMessage(async (msg: WebviewInMessage) => {
     switch (msg.type) {
       case 'runQuery':
         await handleRunQuery(msg.data, context);
@@ -53,41 +77,37 @@ function openPanel(context: vscode.ExtensionContext) {
       case 'getSavedQueries': {
         // Legacy local queries request -> treat as AWS-backed first, fallback to local
         const config = vscode.workspace.getConfiguration();
-        const region = msg.region || config.get('cloudwatchLogsViewer.defaultRegion');
+        const region = (msg as any).region || config.get('cloudwatchLogsViewer.defaultRegion');
         try {
-          const defs = await listQueryDefinitions(region as string);
-          const mapped = defs.map(d => ({ id: d.id, name: d.name, query: d.queryString, logGroups: d.logGroupNames || [] }));
-          panel?.webview.postMessage({ type: 'savedQueries', data: mapped, source: 'aws' });
+          const mapped = await mapAwsQueryDefinitions(region as string);
+          post({ type: 'savedQueries', data: mapped, source: 'aws' });
         } catch (e: any) {
-          // Fallback to local
-          panel?.webview.postMessage({ type: 'savedQueries', data: getSaved(context), source: 'local', error: e.message || String(e) });
+          post({ type: 'savedQueries', data: getSaved(context), source: 'local', error: e.message || String(e) });
         }
         break; }
       case 'saveQuery': {
         const config = vscode.workspace.getConfiguration();
-        const region = msg.region || config.get('cloudwatchLogsViewer.defaultRegion');
+        const region = (msg as any).region || config.get('cloudwatchLogsViewer.defaultRegion');
         try {
           const id = await putQueryDefinition(region as string, { id: msg.data.id, name: msg.data.name, queryString: msg.data.query, logGroupNames: msg.data.logGroups });
-          const defs = await listQueryDefinitions(region as string);
-          const mapped = defs.map(d => ({ id: d.id, name: d.name, query: d.queryString, logGroups: d.logGroupNames || [] }));
-          panel?.webview.postMessage({ type: 'savedQueries', data: mapped, source: 'aws', savedId: id });
+          const mapped = await mapAwsQueryDefinitions(region as string);
+          post({ type: 'savedQueries', data: mapped, source: 'aws', savedId: id });
         } catch (e: any) {
           // fallback to local save
             saveQuery(context, msg.data);
-            panel?.webview.postMessage({ type: 'savedQueries', data: getSaved(context), source: 'local', error: e.message || String(e) });
+            post({ type: 'savedQueries', data: getSaved(context), source: 'local', error: e.message || String(e) });
         }
         break; }
       case 'deleteQuery': {
         const config = vscode.workspace.getConfiguration();
-        const region = msg.region || config.get('cloudwatchLogsViewer.defaultRegion');
+        const region = (msg as any).region || config.get('cloudwatchLogsViewer.defaultRegion');
         try {
           await deleteQueryDefinition(region as string, msg.id);
-          const defs = await listQueryDefinitions(region as string);
-          const mapped = defs.map(d => ({ id: d.id, name: d.name, query: d.queryString, logGroups: d.logGroupNames || [] }));
-          panel?.webview.postMessage({ type: 'savedQueries', data: mapped, source: 'aws' });
+          const mapped = await mapAwsQueryDefinitions(region as string);
+          post({ type: 'savedQueries', data: mapped, source: 'aws' });
         } catch (e: any) {
           deleteQuery(context, msg.id);
-          panel?.webview.postMessage({ type: 'savedQueries', data: getSaved(context), source: 'local', error: e.message || String(e) });
+          post({ type: 'savedQueries', data: getSaved(context), source: 'local', error: e.message || String(e) });
         }
         break; }
       case 'listLogGroups':
@@ -96,22 +116,22 @@ function openPanel(context: vscode.ExtensionContext) {
           const region = msg.region || config.get('cloudwatchLogsViewer.defaultRegion');
           try {
             const groups = await listLogGroups(region as string, msg.prefix || undefined);
-            panel?.webview.postMessage({ type: 'logGroupsList', data: groups });
+            post({ type: 'logGroupsList', data: groups });
           } catch (err: any) {
-            panel?.webview.postMessage({ type: 'logGroupsListError', error: err.message || String(err) });
+            post({ type: 'logGroupsListError', error: err.message || String(err) });
           }
         }
         break;
       case 'getFavorites':
-        panel?.webview.postMessage({ type: 'favorites', data: getFavorites(context) });
+        post({ type: 'favorites', data: getFavorites(context) });
         break;
       case 'addFavorite':
         addFavorite(context, msg.data);
-        panel?.webview.postMessage({ type: 'favorites', data: getFavorites(context) });
+        post({ type: 'favorites', data: getFavorites(context) });
         break;
       case 'removeFavorite':
         removeFavorite(context, msg.name, msg.region);
-        panel?.webview.postMessage({ type: 'favorites', data: getFavorites(context) });
+        post({ type: 'favorites', data: getFavorites(context) });
         break;
     }
   });
@@ -149,14 +169,27 @@ function removeFavorite(context: vscode.ExtensionContext, name: string, region: 
   context.globalState.update(FAVORITES_KEY, getFavorites(context).filter(x => !(x.name === name && x.region === region)));
 }
 
-async function handleRunQuery(data: any, context: vscode.ExtensionContext) {
+async function handleRunQuery(data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number }, context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration();
   const region = data.region || config.get('cloudwatchLogsViewer.defaultRegion') as string;
   const pollIntervalMs = config.get('cloudwatchLogsViewer.queryPollIntervalMs') as number;
   const timeoutMs = config.get('cloudwatchLogsViewer.queryTimeoutMs') as number;
   const startTime = Math.floor(data.startTime / 1000);
   const endTime = Math.floor(data.endTime / 1000);
+  if (!data.logGroups?.length) {
+    post({ type: 'queryError', error: 'No log groups specified' });
+    return;
+  }
+  if (!data.query?.trim()) {
+    post({ type: 'queryError', error: 'Query string is empty' });
+    return;
+  }
   try {
+    // Abort any in-flight query to avoid overlapping polling loops
+    if (currentQueryAbortController) {
+      currentQueryAbortController.abort();
+    }
+    currentQueryAbortController = new AbortController();
     if (outputChannel) {
       const ts = new Date().toISOString();
       const startDate = new Date(data.startTime).toISOString();
@@ -169,7 +202,7 @@ async function handleRunQuery(data: any, context: vscode.ExtensionContext) {
       outputChannel.appendLine('---');
       // Don't show/focus the output channel automatically
     }
-    panel?.webview.postMessage({ type: 'queryStatus', data: { status: 'Running' } });
+    post({ type: 'queryStatus', data: { status: 'Running' } });
     const result = await runInsightsQuery({
       logGroupNames: data.logGroups,
       queryString: data.query,
@@ -178,11 +211,24 @@ async function handleRunQuery(data: any, context: vscode.ExtensionContext) {
       region,
       pollIntervalMs,
       timeoutMs,
-    });
-    panel?.webview.postMessage({ type: 'queryResult', data: result });
+    }, currentQueryAbortController.signal);
+    post({ type: 'queryResult', data: result });
   } catch (err: any) {
-    panel?.webview.postMessage({ type: 'queryError', error: err.message || String(err) });
+    if (err?.name === 'AbortError' || /aborted/i.test(err?.message)) {
+      post({ type: 'queryStatus', data: { status: 'Aborted' } });
+    } else {
+      post({ type: 'queryError', error: err.message || String(err) });
+    }
   }
+}
+
+async function mapAwsQueryDefinitions(region: string): Promise<SavedQuery[]> {
+  const defs = await listQueryDefinitions(region);
+  return defs.map(d => ({ id: d.id, name: d.name, query: d.queryString, logGroups: d.logGroupNames || [] }));
+}
+
+function post(message: WebviewOutMessage) {
+  panel?.webview.postMessage(message);
 }
 
 function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {

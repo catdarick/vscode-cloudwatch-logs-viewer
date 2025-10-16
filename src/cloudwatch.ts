@@ -26,8 +26,17 @@ export interface InsightsFinalResult {
   fieldOrder: string[];
 }
 
+// Simple per-region client cache so we do not re-create clients for every request
+const clientCache: Record<string, CloudWatchLogsClient> = {};
+function getClient(region: string): CloudWatchLogsClient {
+  if (!clientCache[region]) {
+    clientCache[region] = new CloudWatchLogsClient({ region });
+  }
+  return clientCache[region];
+}
+
 export async function listLogGroups(region: string, prefix?: string, limit = 200): Promise<string[]> {
-  const client = new CloudWatchLogsClient({ region });
+  const client = getClient(region);
   const names: string[] = [];
   let nextToken: string | undefined = undefined;
   do {
@@ -44,7 +53,7 @@ export async function listLogGroups(region: string, prefix?: string, limit = 200
 
 export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?: AbortSignal): Promise<InsightsFinalResult> {
   const { logGroupNames, queryString, startTime, endTime, region, pollIntervalMs, timeoutMs } = params;
-  const client = new CloudWatchLogsClient({ region });
+  const client = getClient(region);
 
   const startResp = await client.send(new StartQueryCommand({
     logGroupNames,
@@ -93,7 +102,7 @@ export interface QueryDefinitionSummary {
 }
 
 export async function listQueryDefinitions(region: string, limit = 1000): Promise<QueryDefinitionSummary[]> {
-  const client = new CloudWatchLogsClient({ region });
+  const client = getClient(region);
   const results: QueryDefinitionSummary[] = [];
   let nextToken: string | undefined = undefined;
   do {
@@ -125,7 +134,7 @@ export interface PutQueryDefinitionInput {
 }
 
 export async function putQueryDefinition(region: string, input: PutQueryDefinitionInput): Promise<string> {
-  const client = new CloudWatchLogsClient({ region });
+  const client = getClient(region);
   const resp: any = await client.send(new PutQueryDefinitionCommand({
     queryDefinitionId: input.id,
     name: input.name,
@@ -137,6 +146,6 @@ export async function putQueryDefinition(region: string, input: PutQueryDefiniti
 }
 
 export async function deleteQueryDefinition(region: string, id: string): Promise<void> {
-  const client = new CloudWatchLogsClient({ region });
+  const client = getClient(region);
   await client.send(new DeleteQueryDefinitionCommand({ queryDefinitionId: id }));
 }

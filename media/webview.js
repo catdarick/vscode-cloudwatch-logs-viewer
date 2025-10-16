@@ -608,7 +608,7 @@ function renderSavedQueries(list, source, error) {
   savedQueries = list;
   if (source) savedQueriesSource = source;
   const select = document.getElementById('savedSelect');
-  const header = source === 'aws' ? '-- Load AWS Saved Query --' : '-- Load Local Saved Query --';
+  const header = source === 'aws' ? '-- Saved Queries --' : '-- Load Local Saved Query --';
   select.innerHTML = `<option value="">${header}</option>`;
   list.forEach((item, idx) => {
     const opt = document.createElement('option');
@@ -883,11 +883,5 @@ loadLogGroups(); // auto-load on startup
 toggleTimeMode(); // initialize time mode visibility
 updateSyntaxHighlighting(); // initialize syntax highlighting
 
-// Collapse log groups section by default
-setTimeout(() => {
-  const lgContent = document.getElementById('lgSectionContent');
-  const lgBtn = document.getElementById('lgCollapseBtn');
-  lgContent.classList.add('collapsed');
-  lgBtn.textContent = '▶';
-  lgBtn.title = 'Expand';
-}, 100);
+// Note: Previous logic collapsed log groups via a button id (lgCollapseBtn) that no longer exists.
+// Cleaned up to avoid accessing null elements.

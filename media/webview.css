@@ -14,31 +14,6 @@ body {
   overflow: hidden;
 }
 
-/* SIDEBAR - No longer used */
-.sidebar {
-  display: none;
-}
-
-.favorites-section {
-  display: none;
-}
-
-.fav-list {
-  display: none;
-}
-
-/* FAVORITES PANEL (in main area) - DEPRECATED, now inline in log groups */
-.favorites-panel {
-  display: none;
-}
-
-.favorites-panel .section-header {
-  display: none;
-}
-
-.favorites-panel .section-header:hover {
-  display: none;
-}
 
 /* FAVORITES SECTION INLINE (within log groups panel) */
 .favorites-section-inline {
@@ -177,67 +152,6 @@ body {
   font-style: italic;
 }
 
-/* SIDEBAR */
-.sidebar {
-  background: var(--vscode-sideBar-background);
-  border-right: 1px solid var(--vscode-sideBar-border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.favorites-section {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  flex: 1;
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.75rem 0.75rem 0.5rem;
-  cursor: pointer;
-  user-select: none;
-}
-
-.section-header:hover {
-  background: var(--vscode-list-hoverBackground);
-}
-
-.section-header h2 {
-  padding: 0;
-  margin: 0;
-}
-
-.collapse-btn {
-  background: transparent;
-  color: var(--vscode-foreground);
-  border: none;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.7rem;
-  cursor: pointer;
-  opacity: 0.7;
-}
-
-.collapse-btn:hover {
-  opacity: 1;
-  background: var(--vscode-toolbar-hoverBackground);
-}
-
-.section-content {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  transition: max-height 0.3s ease, opacity 0.3s ease;
-}
-
-.section-content.collapsed {
-  max-height: 0 !important;
-  opacity: 0;
-  overflow: hidden;
-}
 
 h2 {
   font-size: 0.75rem;
@@ -1034,4 +948,9 @@ mark.search-highlight.current-match {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--vscode-scrollbarSlider-hoverBackground);
+}
+
+/* Collapsible Other Groups section (re-added after legacy cleanup) */
+#lgSectionContent.collapsed {
+  display: none;
 }
