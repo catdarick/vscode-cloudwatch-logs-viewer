@@ -73,11 +73,24 @@ updateDateTimeMax();
 // Update every minute to keep max time current
 setInterval(updateDateTimeMax, 60000);
 
-// Query editor syntax highlighting
+// Query editor with syntax highlighting overlay
 const queryEditor = document.getElementById('query');
-queryEditor.addEventListener('input', handleQueryInput);
-queryEditor.addEventListener('keydown', handleQueryKeydown);
-queryEditor.addEventListener('paste', handleQueryPaste);
+const queryHighlight = document.getElementById('queryHighlight');
+
+// Update syntax highlighting on input
+queryEditor.addEventListener('input', updateSyntaxHighlighting);
+queryEditor.addEventListener('scroll', syncScroll);
+
+function syncScroll() {
+  queryHighlight.scrollTop = queryEditor.scrollTop;
+  queryHighlight.scrollLeft = queryEditor.scrollLeft;
+}
+
+function updateSyntaxHighlighting() {
+  const text = queryEditor.value;
+  queryHighlight.innerHTML = highlightQuery(text);
+  syncScroll();
+}
 
 // Log groups collapsible section
 document.getElementById('otherGroupsBtn').addEventListener('click', toggleOtherGroupsSection);
@@ -162,33 +175,15 @@ function getSelectedLogGroups() {
   return Array.from(container.querySelectorAll('.lg-item.selected')).map(item => item.dataset.name);
 }
 
-// Syntax highlighting for CloudWatch Logs Insights
-const KEYWORDS = ['fields', 'filter', 'sort', 'stats', 'limit', 'display', 'parse', 'by', 'as', 'asc', 'desc', 'dedup', 'head', 'tail'];
-const FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'earliest', 'latest', 'pct', 'stddev', 'concat', 'strlen', 'toupper', 'tolower', 'trim', 'ltrim', 'rtrim', 'contains', 'replace', 'strcontains', 'ispresent', 'isblank', 'isempty', 'isnull', 'coalesce', 'bin', 'diff', 'floor', 'ceil', 'abs', 'log', 'sqrt', 'exp'];
-const OPERATORS = ['like', 'in', 'and', 'or', 'not', 'regex', 'match'];
-
-function getQueryText() {
-  const editor = document.getElementById('query');
-  return editor.textContent || '';
-}
-
-function setQueryText(text) {
-  const editor = document.getElementById('query');
-  const selection = saveSelection(editor);
-  editor.innerHTML = highlightQuery(text);
-  updateLineNumbers();
-  if (selection) restoreSelection(editor, selection);
-}
-
 function highlightQuery(text) {
-  if (!text) return '<span class="token-text">\u200B</span>'; // zero-width space for empty placeholder
+  if (!text) return '';
   
   const lines = text.split('\n');
   return lines.map(line => highlightLine(line)).join('\n');
 }
 
 function highlightLine(line) {
-  if (!line) return '<span class="token-text">\u200B</span>';
+  if (!line) return '\n';
   
   let result = '';
   let i = 0;
@@ -277,138 +272,32 @@ function highlightLine(line) {
     i++;
   }
   
-  return result || '<span class="token-text">\u200B</span>';
+  return result;
 }
 
 function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
-function saveSelection(element) {
-  const sel = window.getSelection();
-  if (!sel.rangeCount) return null;
-  
-  const range = sel.getRangeAt(0);
-  const preSelectionRange = range.cloneRange();
-  preSelectionRange.selectNodeContents(element);
-  preSelectionRange.setEnd(range.startContainer, range.startOffset);
-  const start = preSelectionRange.toString().length;
-  
-  return {
-    start: start,
-    end: start + range.toString().length
-  };
+// Syntax highlighting for CloudWatch Logs Insights
+const KEYWORDS = ['fields', 'filter', 'sort', 'stats', 'limit', 'display', 'parse', 'by', 'as', 'asc', 'desc', 'dedup', 'head', 'tail'];
+const FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'earliest', 'latest', 'pct', 'stddev', 'concat', 'strlen', 'toupper', 'tolower', 'trim', 'ltrim', 'rtrim', 'contains', 'replace', 'strcontains', 'ispresent', 'isblank', 'isempty', 'isnull', 'coalesce', 'bin', 'diff', 'floor', 'ceil', 'abs', 'log', 'sqrt', 'exp'];
+const OPERATORS = ['like', 'in', 'and', 'or', 'not', 'regex', 'match'];
+
+function getQueryText() {
+  const editor = document.getElementById('query');
+  return editor.value || '';
 }
 
-function restoreSelection(element, savedSel) {
-  const charIndex = savedSel.start;
-  const range = document.createRange();
-  range.setStart(element, 0);
-  range.collapse(true);
-  
-  const nodeStack = [element];
-  let node;
-  let foundStart = false;
-  let stop = false;
-  let charCount = 0;
-  
-  while (!stop && (node = nodeStack.pop())) {
-    if (node.nodeType === 3) {
-      const nextCharCount = charCount + node.length;
-      if (!foundStart && charIndex >= charCount && charIndex <= nextCharCount) {
-        range.setStart(node, charIndex - charCount);
-        range.setEnd(node, charIndex - charCount);
-        stop = true;
-      }
-      charCount = nextCharCount;
-    } else {
-      let i = node.childNodes.length;
-      while (i--) {
-        nodeStack.push(node.childNodes[i]);
-      }
-    }
-  }
-  
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
-}
-
-function handleQueryInput(e) {
-  const text = getQueryText();
-  setQueryText(text);
-}
-
-function handleQueryKeydown(e) {
-  // Tab handling
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    const selection = window.getSelection();
-    if (!selection.rangeCount) return;
-    
-    const range = selection.getRangeAt(0);
-    const textNode = document.createTextNode('  ');
-    range.deleteContents();
-    range.insertNode(textNode);
-    range.setStartAfter(textNode);
-    range.setEndAfter(textNode);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    handleQueryInput();
-    return;
-  }
-  
-  // Enter handling
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    const selection = window.getSelection();
-    if (!selection.rangeCount) return;
-    
-    const range = selection.getRangeAt(0);
-    const textNode = document.createTextNode('\n');
-    range.deleteContents();
-    range.insertNode(textNode);
-    range.setStartAfter(textNode);
-    range.setEndAfter(textNode);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    handleQueryInput();
-    return;
-  }
-}
-
-function handleQueryPaste(e) {
-  e.preventDefault();
-  const text = (e.clipboardData || window.clipboardData).getData('text/plain');
-  const selection = window.getSelection();
-  if (!selection.rangeCount) return;
-  
-  selection.deleteFromDocument();
-  const range = selection.getRangeAt(0);
-  const textNode = document.createTextNode(text);
-  range.insertNode(textNode);
-  
-  // Move cursor to end of inserted text
-  range.setStartAfter(textNode);
-  range.setEndAfter(textNode);
-  selection.removeAllRanges();
-  selection.addRange(range);
-  
-  // Trigger highlighting
-  handleQueryInput();
-}
-
-function updateLineNumbers() {
-  const text = getQueryText();
-  const lineCount = text.split('\n').length;
-  const lineNumbers = document.getElementById('lineNumbers');
-  const numbers = [];
-  for (let i = 1; i <= lineCount; i++) {
-    numbers.push(i);
-  }
-  lineNumbers.textContent = numbers.join('\n');
+function setQueryText(text) {
+  const editor = document.getElementById('query');
+  editor.value = text;
+  updateSyntaxHighlighting();
 }
 
 function runQuery() {
@@ -991,8 +880,8 @@ window.addEventListener('message', (event) => {
 vscode.postMessage({ type: 'getSavedQueries' });
 vscode.postMessage({ type: 'getFavorites' });
 loadLogGroups(); // auto-load on startup
-updateLineNumbers(); // initialize line numbers
 toggleTimeMode(); // initialize time mode visibility
+updateSyntaxHighlighting(); // initialize syntax highlighting
 
 // Collapse log groups section by default
 setTimeout(() => {

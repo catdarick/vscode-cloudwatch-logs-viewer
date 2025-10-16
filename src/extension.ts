@@ -240,8 +240,11 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
               </div>
             </div>
             <div class="code-editor-container">
-              <div class="line-numbers" id="lineNumbers"></div>
-              <div id="query" class="code-editor" contenteditable="true" spellcheck="false" data-placeholder="fields @timestamp, @message&#10;| filter @message like /ERROR/&#10;| sort @timestamp desc&#10;| limit 100"></div>
+              <div id="queryHighlight" class="code-editor-highlight"></div>
+              <textarea id="query" class="code-editor" spellcheck="false" placeholder="Enter your CloudWatch Logs Insights query here...">fields @timestamp, @message
+| filter @message like /ERROR/
+| sort @timestamp desc
+| limit 100</textarea>
             </div>
           </div>
           <div class="query-controls-sidebar">
@@ -286,13 +289,13 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
         <div class="results-header">
           <h2>Results <span id="resultCount"></span></h2>
           <div class="search-controls">
-            <input id="searchInput" placeholder="Search in results (Ctrl+F)..." />
-            <button id="searchPrevBtn" title="Previous match">▲</button>
-            <button id="searchNextBtn" title="Next match">▼</button>
             <label class="search-toggle">
               <input type="checkbox" id="searchHideNonMatching" checked />
               <span>Hide non-matching</span>
             </label>
+            <input id="searchInput" placeholder="Search in results (Ctrl+F)..." />
+            <button id="searchPrevBtn" title="Previous match">▲</button>
+            <button id="searchNextBtn" title="Next match">▼</button>
             <button id="searchClearBtn" title="Clear search">✕</button>
           </div>
         </div>

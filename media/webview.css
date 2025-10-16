@@ -429,7 +429,7 @@ h2 .count {
 .query-editor-row {
   display: flex;
   gap: 1rem;
-  align-items: flex-start;
+  align-items: stretch;
 }
 
 .query-header-row {
@@ -668,47 +668,74 @@ h2 .count {
 }
 
 .code-editor-container {
-  display: flex;
+  position: relative;
   background: var(--vscode-editor-background);
   border: 1px solid var(--vscode-input-border);
   border-radius: 4px;
-  overflow: hidden;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-  font-size: 0.75rem;
+  font-size: 0.85rem;
+  flex: 1;
   min-height: 120px;
-  max-height: 300px;
 }
 
-.line-numbers {
-  background: var(--vscode-editorGutter-background);
-  color: var(--vscode-editorLineNumber-foreground);
-  padding: 0.5rem 0.5rem 0.5rem 0.75rem;
-  text-align: right;
-  user-select: none;
-  border-right: 1px solid var(--vscode-editorGroup-border);
-  line-height: 1.5;
-  min-width: 40px;
-  white-space: pre;
+.code-editor-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.5rem;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: var(--vscode-editor-foreground);
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-  font-size: 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .code-editor {
-  flex: 1;
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
   padding: 0.5rem;
+  margin: 0;
   outline: none;
-  overflow-y: auto;
-  white-space: pre;
+  border: none;
+  background: transparent;
+  color: transparent;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 0.85rem;
   line-height: 1.5;
-  color: var(--vscode-editor-foreground);
+  resize: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  tab-size: 2;
+  box-sizing: border-box;
+  caret-color: var(--vscode-editor-foreground);
+  -webkit-text-fill-color: transparent;
 }
 
-.code-editor:empty:before {
-  content: attr(data-placeholder);
+.code-editor::selection {
+  background: var(--vscode-editor-selectionBackground);
+}
+
+.code-editor::placeholder {
   color: var(--vscode-input-placeholderForeground);
   opacity: 0.6;
-  pointer-events: none;
-  white-space: pre-wrap;
+}
+
+.code-editor:focus {
+  outline: none;
 }
 
 /* Syntax highlighting tokens */
