@@ -159,7 +159,7 @@ function currentTimeRange() {
 
 function getSelectedLogGroups() {
   const container = document.getElementById('lgList');
-  return Array.from(container.querySelectorAll('input[type=checkbox]:checked')).map(c => c.dataset.name);
+  return Array.from(container.querySelectorAll('.lg-item.selected')).map(item => item.dataset.name);
 }
 
 // Syntax highlighting for CloudWatch Logs Insights
@@ -543,29 +543,53 @@ function renderLogGroups(groups) {
   const region = document.getElementById('region').value.trim() || 'us-east-2';
   groups.forEach(g => {
     const isFav = currentFavorites.some(f => f.name === g && f.region === region);
+    const isSelected = isLogGroupSelected(g, region);
+    
     const wrapper = document.createElement('div');
     wrapper.className = 'lg-item';
+    wrapper.dataset.name = g;
+    wrapper.dataset.region = region;
+    if (isSelected) {
+      wrapper.classList.add('selected');
+    }
     
-    const cb = document.createElement('input'); 
-    cb.type = 'checkbox'; 
-    cb.dataset.name = g;
-    cb.addEventListener('change', () => {
+    const btn = document.createElement('button');
+    btn.className = 'lg-btn';
+    btn.title = isSelected ? 'Click to deselect' : 'Click to select';
+    btn.addEventListener('click', () => {
+      const currentlySelected = wrapper.classList.contains('selected');
+      if (currentlySelected) {
+        wrapper.classList.remove('selected');
+      } else {
+        wrapper.classList.add('selected');
+      }
       updateSelectedCount();
       updateFavoritesCheckboxes();
     });
     
-    const label = document.createElement('label'); 
-    label.textContent = g;
-    label.addEventListener('click', () => cb.click());
+    // Checkmark indicator
+    const checkmark = document.createElement('span');
+    checkmark.className = 'lg-checkmark';
+    checkmark.textContent = '✓';
+    
+    // Text content
+    const text = document.createElement('span');
+    text.className = 'lg-text';
+    text.textContent = g;
+    
+    btn.appendChild(checkmark);
+    btn.appendChild(text);
     
     const starBtn = document.createElement('button');
     starBtn.className = 'star-btn' + (isFav ? ' active' : '');
     starBtn.textContent = isFav ? '★' : '☆';
     starBtn.title = isFav ? 'Remove from favorites' : 'Add to favorites';
-    starBtn.addEventListener('click', () => toggleFavorite(g, region));
+    starBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleFavorite(g, region);
+    });
     
-    wrapper.appendChild(cb); 
-    wrapper.appendChild(label); 
+    wrapper.appendChild(btn);
     wrapper.appendChild(starBtn);
     container.appendChild(wrapper);
   });
@@ -578,8 +602,27 @@ function filterLogGroups() {
   const filter = document.getElementById('lgFilter').value.trim().toLowerCase();
   const items = document.querySelectorAll('.lg-item');
   items.forEach(item => {
-    const label = item.querySelector('label').textContent.toLowerCase();
-    item.style.display = label.includes(filter) ? 'flex' : 'none';
+    const name = item.dataset.name.toLowerCase();
+    item.style.display = name.includes(filter) ? 'flex' : 'none';
+  });
+}
+
+function updateStarButtons() {
+  const region = document.getElementById('region').value.trim() || 'us-east-2';
+  const items = document.querySelectorAll('.lg-item');
+  items.forEach(item => {
+    const name = item.dataset.name;
+    const starBtn = item.querySelector('.star-btn');
+    if (starBtn && name) {
+      const isFav = currentFavorites.some(f => f.name === name && f.region === region);
+      starBtn.textContent = isFav ? '★' : '☆';
+      starBtn.title = isFav ? 'Remove from favorites' : 'Add to favorites';
+      if (isFav) {
+        starBtn.classList.add('active');
+      } else {
+        starBtn.classList.remove('active');
+      }
+    }
   });
 }
 
@@ -636,17 +679,7 @@ function renderFavorites(favs) {
     btn.appendChild(checkmark);
     btn.appendChild(text);
     
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'fav-remove';
-    removeBtn.textContent = '✕';
-    removeBtn.title = 'Remove from favorites';
-    removeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      vscode.postMessage({ type: 'removeFavorite', name: f.name, region: f.region });
-    });
-    
     wrapper.appendChild(btn);
-    wrapper.appendChild(removeBtn);
     container.appendChild(wrapper);
   });
 }
@@ -906,9 +939,12 @@ function toggleFavoriteSelection(fav, shouldSelect) {
 function setLogGroupCheckbox(name, checked) {
   const items = document.querySelectorAll('.lg-item');
   items.forEach(item => {
-    const cb = item.querySelector('input[type=checkbox]');
-    if (cb && cb.dataset.name === name) {
-      cb.checked = checked;
+    if (item.dataset.name === name) {
+      if (checked) {
+        item.classList.add('selected');
+      } else {
+        item.classList.remove('selected');
+      }
       updateSelectedCount();
       updateFavoritesCheckboxes();
     }
@@ -940,6 +976,7 @@ window.addEventListener('message', (event) => {
       break;
     case 'favorites':
       renderFavorites(msg.data);
+      updateStarButtons();
       break;
     case 'runFromCommand':
       runQuery();

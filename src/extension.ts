@@ -167,7 +167,7 @@ async function handleRunQuery(data: any, context: vscode.ExtensionContext) {
       outputChannel.appendLine('Query:');
       outputChannel.appendLine(data.query);
       outputChannel.appendLine('---');
-      outputChannel.show(true);
+      // Don't show/focus the output channel automatically
     }
     panel?.webview.postMessage({ type: 'queryStatus', data: { status: 'Running' } });
     const result = await runInsightsQuery({
@@ -210,11 +210,11 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
         
         <!-- Favorites (always visible) -->
         <div class="favorites-section-inline">
-          <div class="favorites-header">
-            <h3>★ Favorites <span class="count" id="favCount">0</span></h3>
+          <h3>★ Favorites <span class="count" id="favCount">0</span></h3>
+          <div class="favorites-row">
+            <div id="favList" class="fav-list-horizontal"></div>
             <button id="otherGroupsBtn" class="toggle-other-groups-btn">▶ Other Groups</button>
           </div>
-          <div id="favList" class="fav-list-horizontal"></div>
         </div>
         
         <!-- Other Groups (collapsible) -->
@@ -229,14 +229,29 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
       </section>
 
       <section class="query-panel">
-        <div class="query-header">
-          <h2>Query Editor</h2>
-          <div class="query-controls">
-            <div class="time-mode-toggle">
-              <button class="mode-btn active" data-mode="relative">Relative</button>
-              <button class="mode-btn" data-mode="absolute">Absolute</button>
+        <div class="query-editor-row">
+          <div class="query-editor-wrapper">
+            <div class="query-header-row">
+              <h2>Query Editor</h2>
+              <div class="saved-query-selector">
+                <select id="savedSelect">
+                  <option value="">Load saved query...</option>
+                </select>
+              </div>
             </div>
-            <div class="time-inputs-container">
+            <div class="code-editor-container">
+              <div class="line-numbers" id="lineNumbers"></div>
+              <div id="query" class="code-editor" contenteditable="true" spellcheck="false" data-placeholder="fields @timestamp, @message&#10;| filter @message like /ERROR/&#10;| sort @timestamp desc&#10;| limit 100"></div>
+            </div>
+          </div>
+          <div class="query-controls-sidebar">
+            <h2>Time Range</h2>
+            <div class="time-range-controls">
+              <div class="time-mode-toggle">
+                  <button class="mode-btn active" data-mode="relative">Relative</button>
+                  <button class="mode-btn" data-mode="absolute">Absolute</button>
+                </div>
+                <div class="time-inputs-container">
               <label class="inline-label relative-time">
                 <select id="timeRange"></select>
               </label>
@@ -249,7 +264,7 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
                     <button class="icon-btn" id="startNowBtn" title="Set to now">Now</button>
                   </div>
                 </div>
-                <button class="icon-btn copy-btn" id="copyStartToEnd" title="Copy start to end">→</button>
+                <button class="icon-btn copy-btn" id="copyStartToEnd" title="Copy start to end">↓</button>
                 <div class="datetime-field">
                   <label class="field-label">End</label>
                   <div class="datetime-inputs">
@@ -260,19 +275,9 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
                 </div>
                 <span class="time-zone-label">(UTC)</span>
               </div>
+              </div>
             </div>
             <button id="runBtn" class="primary-btn">▶ Run Query</button>
-          </div>
-        </div>
-        <div class="query-editor-wrapper">
-          <div class="code-editor-container">
-            <div class="line-numbers" id="lineNumbers"></div>
-            <div id="query" class="code-editor" contenteditable="true" spellcheck="false" data-placeholder="fields @timestamp, @message&#10;| filter @message like /ERROR/&#10;| sort @timestamp desc&#10;| limit 100"></div>
-          </div>
-          <div class="query-actions">
-            <select id="savedSelect">
-              <option value="">-- Load Saved Query --</option>
-            </select>
           </div>
         </div>
       </section>
