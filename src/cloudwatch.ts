@@ -77,13 +77,18 @@ export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?
       const rows = (resp.results || []).map(r => ({
         fields: (r || []).map(f => ({ field: f.field || '', value: f.value || '' }))
       }));
-      const fieldSet = new Set<string>();
-      rows.forEach(r => r.fields.forEach(f => fieldSet.add(f.field)));
+      // Collect all fields actually returned
+      const discovered = new Set<string>();
+      rows.forEach(r => r.fields.forEach(f => { if (f.field) discovered.add(f.field); }));
+      // Derive explicit order from query's first `fields` clause
+      const explicit = extractFieldsOrder(queryString);
+      // Append any remaining discovered fields not explicitly ordered
+      const ordered = [...explicit, ...Array.from(discovered).filter(f => !explicit.includes(f))];
       return {
         rows,
         statistics: resp.statistics as Record<string, unknown> | undefined,
         status: resp.status || 'Unknown',
-        fieldOrder: Array.from(fieldSet)
+        fieldOrder: ordered
       };
     }
     if (Date.now() - start > timeoutMs) {
@@ -148,4 +153,41 @@ export async function putQueryDefinition(region: string, input: PutQueryDefiniti
 export async function deleteQueryDefinition(region: string, id: string): Promise<void> {
   const client = getClient(region);
   await client.send(new DeleteQueryDefinitionCommand({ queryDefinitionId: id }));
+}
+
+// Attempt to parse the first Logs Insights `fields` clause to preserve user-specified order
+function extractFieldsOrder(query: string): string[] {
+  if (!query) return [];
+  // Normalize line endings and split at pipes so we don't grab following commands
+  const lower = query.toLowerCase();
+  const idx = lower.indexOf('fields ');
+  if (idx === -1) return [];
+  // Slice from 'fields ' onwards until newline or next pipe
+  const slice = query.slice(idx); // original casing preserved
+  const terminatorIdx = slice.search(/\n|\|/); // stop at first newline or pipe
+  const clause = terminatorIdx >= 0 ? slice.substring(0, terminatorIdx) : slice;
+  // Remove leading 'fields'
+  const afterKeyword = clause.replace(/^[Ff][Ii][Ee][Ll][Dd][Ss]\s+/, '');
+  // Split on commas not inside quotes (lightweight – queries usually simple)
+  const parts = afterKeyword.split(',');
+  const ordered: string[] = [];
+  for (let raw of parts) {
+    let token = raw.trim();
+    if (!token) continue;
+    // Remove inline comments starting with #
+    const cIdx = token.indexOf('#');
+    if (cIdx >= 0) token = token.slice(0, cIdx).trim();
+    if (!token) continue;
+    // Handle aliases: pattern  expr  as alias
+    const aliasMatch = token.match(/^(.*?)\s+as\s+([A-Za-z0-9_@.]+)/i);
+    if (aliasMatch) {
+      token = aliasMatch[2];
+    }
+    // Remove surrounding quotes if any
+    token = token.replace(/^['"]|['"]$/g, '');
+    // Only keep plausible field identifiers (permit @, letters, numbers, underscore, dot)
+    if (!/^[@A-Za-z0-9_.]+$/.test(token)) continue;
+    if (!ordered.includes(token)) ordered.push(token);
+  }
+  return ordered;
 }
