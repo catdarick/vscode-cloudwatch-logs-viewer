@@ -347,6 +347,7 @@ function runQuery() {
     const runBtn = document.getElementById('runBtn');
     if (!logGroups.length) {
         setStatus('⚠ Select at least one log group');
+        pulseLogGroupsAttention();
         return;
     }
     if (!query.trim()) {
@@ -363,6 +364,22 @@ function runQuery() {
 
 function setStatus(msg) {
     document.getElementById('status').textContent = msg;
+}
+
+// Briefly pulse-highlight the log groups panel to draw user attention when required selection missing
+function pulseLogGroupsAttention() {
+    try {
+        const panel = document.querySelector('.log-groups-panel');
+        if (!panel) return;
+        // If already pulsing restart the animation by cloning (css animations don't always restart when class re-added quickly)
+        panel.classList.remove('cwlv-pulse-attention');
+        // Force reflow to allow animation restart
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        void panel.offsetWidth;
+        panel.classList.add('cwlv-pulse-attention');
+    // Remove class after single animation completes (~1.1s + buffer)
+    setTimeout(() => panel.classList.remove('cwlv-pulse-attention'), 1400);
+    } catch (_) { /* ignore */ }
 }
 
 function renderResults(payload) {
