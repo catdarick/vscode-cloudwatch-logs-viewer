@@ -13,9 +13,7 @@ type WebviewInMessage =
   | { type: 'listLogGroups'; region?: string; prefix?: string }
   | { type: 'getFavorites' }
   | { type: 'addFavorite'; data: FavoriteLogGroup }
-  | { type: 'removeFavorite'; name: string; region: string }
-  | { type: 'runFromCommand' }
-  | { type: 'saveFromCommand' };
+  | { type: 'removeFavorite'; name: string; region: string };
 
 // Outgoing messages (subset typed for clarity)
 type WebviewOutMessage =
@@ -32,15 +30,7 @@ const FAVORITES_KEY = 'cloudwatchLogsViewer.favoriteLogGroups';
 
 export function activate(context: vscode.ExtensionContext) {
   const openCmd = vscode.commands.registerCommand('cloudwatchLogsViewer.open', () => openPanel(context));
-  const runCmd = vscode.commands.registerCommand('cloudwatchLogsViewer.runQuery', () => {
-    ensurePanel(context);
-    panel?.webview.postMessage({ type: 'runFromCommand' });
-  });
-  const saveCmd = vscode.commands.registerCommand('cloudwatchLogsViewer.saveQuery', async () => {
-    ensurePanel(context);
-    panel?.webview.postMessage({ type: 'saveFromCommand' });
-  });
-  context.subscriptions.push(openCmd, runCmd, saveCmd);
+  context.subscriptions.push(openCmd);
 }
 
 export function deactivate() { }

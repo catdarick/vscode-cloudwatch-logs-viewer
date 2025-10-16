@@ -2,7 +2,7 @@
   "name": "cloudwatch-logs-viewer",
   "displayName": "CloudWatch Logs Viewer",
   "description": "View and query AWS CloudWatch Logs Insights directly inside VS Code with time range selector, favorites and saved queries.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "catdarick",
   "author": "catdarick",
   "repository": {
@@ -10,7 +10,7 @@
     "url": "https://github.com/catdarick/vscode-cloudwatch-logs-viewer.git"
   },
   "bugs": {
-    "url": "https://github.comcatdarick/vscode-cloudwatch-logs-viewer/issues"
+    "url": "https://github.com/catdarick/vscode-cloudwatch-logs-viewer/issues"
   },
   "homepage": "https://github.com/catdarick/vscode-cloudwatch-logs-viewer#readme",
   "icon": "media/icon.png",
@@ -30,14 +30,6 @@
       {
         "command": "cloudwatchLogsViewer.open",
         "title": "CloudWatch Logs: Open Viewer"
-      },
-      {
-        "command": "cloudwatchLogsViewer.runQuery",
-        "title": "CloudWatch Logs: Run Last Query"
-      },
-      {
-        "command": "cloudwatchLogsViewer.saveQuery",
-        "title": "CloudWatch Logs: Save Current Query"
       }
     ],
     "configuration": {

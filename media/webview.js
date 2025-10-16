@@ -867,12 +867,6 @@ window.addEventListener('message', (event) => {
       renderFavorites(msg.data);
       updateStarButtons();
       break;
-    case 'runFromCommand':
-      runQuery();
-      break;
-    case 'saveFromCommand':
-      saveCurrentQuery();
-      break;
   }
 });
 

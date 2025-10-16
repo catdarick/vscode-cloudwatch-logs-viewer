@@ -18,10 +18,8 @@ Provide AWS credentials (shared config/env/SSO/role). Minimum IAM:
 `logs:StartQuery`, `logs:GetQueryResults`, `logs:DescribeLogGroups`
 Optional for saved queries: `logs:DescribeQueryDefinitions`, `logs:PutQueryDefinition`, `logs:DeleteQueryDefinition`.
 
-## Commands
+## Command
 * CloudWatch Logs: Open Viewer (`cloudwatchLogsViewer.open`)
-* CloudWatch Logs: Run Last Query (`cloudwatchLogsViewer.runQuery`)
-* CloudWatch Logs: Save Current Query (`cloudwatchLogsViewer.saveQuery`)
 
 ## Settings
 ```
@@ -44,6 +42,7 @@ cloudwatchLogsViewer.queryTimeoutMs       (number, default 60000)
 * Falls back to local saved queries if AWS definition APIs not permitted.
 
 ## Changelog
+0.2.0 – Removed deprecated Run Last Query & Save Current Query commands; use the panel buttons instead. Fixed bugs URL metadata.
 0.1.0 – Initial public alpha.
 
 ## License
