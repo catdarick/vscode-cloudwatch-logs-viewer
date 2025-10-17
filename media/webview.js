@@ -83,8 +83,45 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
 });
 
 // Relative time controls
-document.getElementById('relativeValue').addEventListener('input', (e) => {
-    relativeValue = Math.max(1, parseInt(e.target.value, 10) || 1);
+const relativeValueInput = document.getElementById('relativeValue');
+
+// Quick value buttons
+document.querySelectorAll('.relative-quick-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        // Update active state
+        document.querySelectorAll('.relative-quick-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        // Update value
+        relativeValue = parseInt(btn.dataset.value, 10);
+        relativeValueInput.value = ''; // Clear custom input
+        relativeValueInput.classList.remove('active'); // Remove highlight from custom input
+    });
+});
+
+// Custom input field
+relativeValueInput.addEventListener('input', (e) => {
+    const val = parseInt(e.target.value, 10);
+    if (val && val >= 1) {
+        relativeValue = val;
+        // Deactivate quick buttons when using custom value
+        document.querySelectorAll('.relative-quick-btn').forEach(b => b.classList.remove('active'));
+        // Highlight the custom input
+        relativeValueInput.classList.add('active');
+    } else {
+        // Remove highlight if field is empty
+        relativeValueInput.classList.remove('active');
+    }
+});
+
+// Auto-select content when clicking on the custom field
+relativeValueInput.addEventListener('click', (e) => {
+    e.target.select();
+});
+
+// Also select on focus for keyboard navigation
+relativeValueInput.addEventListener('focus', (e) => {
+    e.target.select();
 });
 
 document.querySelectorAll('.unit-btn').forEach(btn => {

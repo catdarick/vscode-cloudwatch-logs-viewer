@@ -345,7 +345,25 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
               <div class="relative-time">
                 <div class="relative-time-row">
                   <span class="relative-label">Last</span>
-                  <input type="number" id="relativeValue" class="relative-value-input" value="1" min="1" />
+                  <div class="relative-value-options">
+                    <div class="relative-quick-row">
+                      <button type="button" class="relative-quick-btn active" data-value="1">1</button>
+                      <button type="button" class="relative-quick-btn" data-value="2">2</button>
+                      <button type="button" class="relative-quick-btn" data-value="3">3</button>
+                      <button type="button" class="relative-quick-btn" data-value="5">5</button>
+                      <button type="button" class="relative-quick-btn" data-value="7">7</button>
+                    </div>
+                    <div class="relative-quick-row">
+                      <button type="button" class="relative-quick-btn" data-value="10">10</button>
+                      <button type="button" class="relative-quick-btn" data-value="15">15</button>
+                      <button type="button" class="relative-quick-btn" data-value="30">30</button>
+                      <button type="button" class="relative-quick-btn" data-value="60">60</button>
+                      <button type="button" class="relative-quick-btn" data-value="90">90</button>
+                    </div>
+                    <div class="relative-custom-row">
+                      <input type="number" id="relativeValue" class="relative-custom-input" placeholder="Custom" min="1" />
+                    </div>
+                  </div>
                   <div class="unit-toggle">
                     <button class="unit-btn active" data-unit="minutes">minutes</button>
                     <button class="unit-btn" data-unit="hours">hours</button>

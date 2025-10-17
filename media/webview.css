@@ -469,19 +469,92 @@ tr.row-hidden { display: none !important; }
   white-space: nowrap;
 }
 
-.relative-value-input {
-  width: 70px;
-  padding: 0.4rem 0.5rem;
-  font-size: 0.8rem;
+.relative-value-options {
+  display: grid;
+  grid-template-columns: repeat(5, 30px);
+  gap: 3px;
+  width: fit-content;
+}
+
+.relative-quick-row {
+  display: contents;
+}
+
+.relative-custom-row {
+  grid-column: 1 / -1;
+  display: flex;
+}
+
+.relative-quick-row:first-child {
+  width: auto;
+}
+
+.relative-quick-row:last-child {
+  width: auto;
+}
+
+.relative-quick-btn {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border: 1px solid var(--vscode-button-border);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+  min-width: 30px;
+  width: 30px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.relative-quick-btn:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.relative-quick-btn.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-focusBorder);
+}
+
+.relative-custom-input {
+  width: 100%;
+  min-width: 30px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   border: 1px solid var(--vscode-input-border);
-  border-radius: 4px;
+  border-radius: 3px;
   outline: none;
-  transition: border-color 0.2s ease;
+  transition: all 0.2s ease;
+  text-align: center;
+  margin-top: 1px;
 }
 
-.relative-value-input:focus {
+.relative-custom-input.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-focusBorder);
+  font-weight: 500;
+}
+
+/* Hide native spinner buttons */
+.relative-custom-input::-webkit-outer-spin-button,
+.relative-custom-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.relative-custom-input[type=number] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.relative-custom-input:focus {
   border-color: var(--vscode-focusBorder);
 }
 
