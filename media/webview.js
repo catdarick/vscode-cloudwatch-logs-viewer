@@ -35,6 +35,29 @@ const commentToken = '#'; // fixed CloudWatch Logs comment token
 let relativeValue = 1;
 let relativeUnit = 'hours'; // 'minutes', 'hours', 'days'
 
+// Tab management state
+let tabs = [];
+let activeTabId = null;
+let nextTabId = 1;
+let runningQueryTabId = null; // Track which tab is running a query
+
+// Tab structure:
+// {
+//   id: number,
+//   name: string,
+//   timestamp: number,
+//   query: string,
+//   logGroups: string[],
+//   region: string,
+//   timeRange: { start: number, end: number },
+//   results: object,
+//   searchQuery: string,
+//   searchIndex: number,
+//   columnFilters: object,
+//   expandedRows: Set,
+//   scrollPosition: number
+// }
+
 // Event listeners
 document.getElementById('runBtn').addEventListener('click', () => {
     const btn = document.getElementById('runBtn');
@@ -192,6 +215,9 @@ function updateSyntaxHighlighting() {
 // Log groups collapsible section
 document.getElementById('otherGroupsBtn').addEventListener('click', toggleOtherGroupsSection);
 
+// Tab management
+document.getElementById('newTabBtn').addEventListener('click', createNewTab);
+
 // Favorites collapsible section - removed, favorites are always visible now
 
 // Keyboard shortcuts
@@ -203,6 +229,33 @@ document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
         document.getElementById('searchInput').focus();
+    }
+    
+    // Tab navigation shortcuts
+    if ((e.ctrlKey || e.metaKey) && e.key === 't' && !e.shiftKey) {
+        e.preventDefault();
+        createNewTab();
+    }
+    
+    if ((e.ctrlKey || e.metaKey) && e.key === 'w' && !e.shiftKey) {
+        e.preventDefault();
+        if (activeTabId) {
+            closeTab(activeTabId);
+        }
+    }
+    
+    // Ctrl/Cmd+Tab for next tab, Ctrl/Cmd+Shift+Tab for previous tab
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
+        e.preventDefault();
+        if (tabs.length > 1) {
+            const currentIndex = tabs.findIndex(t => t.id === activeTabId);
+            if (currentIndex !== -1) {
+                const nextIndex = e.shiftKey 
+                    ? (currentIndex - 1 + tabs.length) % tabs.length
+                    : (currentIndex + 1) % tabs.length;
+                switchToTab(tabs[nextIndex].id);
+            }
+        }
     }
 });
 // Messages from extension
@@ -456,11 +509,36 @@ function currentTimeRange() {
         const startTime = document.getElementById('startTime').value;
         const endDate = document.getElementById('endDate').value;
         const endTime = document.getElementById('endTime').value;
-        const startStr = startDate && startTime ? `${startDate}T${startTime}Z` : null;
-        const endStr = endDate && endTime ? `${endDate}T${endTime}Z` : null;
+        
+        // Validate that all absolute time fields are filled
+        if (!startDate || !startTime) {
+            throw new Error('Start date and time are required for absolute time range');
+        }
+        if (!endDate || !endTime) {
+            throw new Error('End date and time are required for absolute time range');
+        }
+        
+        const startStr = `${startDate}T${startTime}Z`;
+        const endStr = `${endDate}T${endTime}Z`;
+        const startMs = new Date(startStr).getTime();
+        const endMs = new Date(endStr).getTime();
+        
+        // Validate that the dates are valid
+        if (isNaN(startMs)) {
+            throw new Error('Invalid start date/time format');
+        }
+        if (isNaN(endMs)) {
+            throw new Error('Invalid end date/time format');
+        }
+        
+        // Validate that start is before end
+        if (startMs >= endMs) {
+            throw new Error('Start time must be before end time');
+        }
+        
         return {
-            start: startStr ? new Date(startStr).getTime() : Date.now() - 60 * 60 * 1000,
-            end: endStr ? new Date(endStr).getTime() : Date.now()
+            start: startMs,
+            end: endMs
         };
     } else {
         // Calculate milliseconds from relative value and unit
@@ -798,8 +876,463 @@ function schedulePersistLastQuery() {
     }, 400); // 400ms debounce
 }
 
+// ========== TAB MANAGEMENT ==========
+
+function createTab(options = {}) {
+    const tab = {
+        id: nextTabId++,
+        name: options.name || 'Results',
+        isCustomName: options.isCustomName || false,
+        timestamp: Date.now(),
+        query: options.query || '',
+        logGroups: options.logGroups || [],
+        region: options.region || '',
+        timeRange: options.timeRange || { start: 0, end: 0 },
+        results: options.results || null,
+        searchQuery: '',
+        searchIndex: -1,
+        columnFilters: {},
+        expandedRows: new Set(),
+        scrollPosition: 0,
+        isStreaming: options.isStreaming || false
+    };
+    tabs.push(tab);
+    return tab;
+}
+
+function formatTimestamp(timestamp) {
+    const d = new Date(timestamp);
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const seconds = String(d.getSeconds()).padStart(2, '0');
+    return `${hours}:${minutes}:${seconds}`;
+}
+
+function getActiveTab() {
+    return tabs.find(t => t.id === activeTabId);
+}
+
+function getRowCountText() {
+    const activeTab = getActiveTab();
+    if (!activeTab || !activeTab.results || !activeTab.results.rows) {
+        return '';
+    }
+    
+    const totalRows = activeTab.results.rows.length;
+    
+    // Check if there are active filters
+    if (activeTab.columnFilters && Object.keys(activeTab.columnFilters).length > 0) {
+        // Count visible rows based on filters
+        let visibleRows = 0;
+        for (let i = 0; i < activeTab.results.rows.length; i++) {
+            const row = activeTab.results.rows[i];
+            let shouldShow = true;
+            
+            for (const [fieldName, allowedValues] of Object.entries(activeTab.columnFilters)) {
+                if (allowedValues.size === 0) {
+                    shouldShow = false;
+                    break;
+                }
+                
+                const fieldObj = row.fields.find(f => f.field === fieldName);
+                const value = fieldObj ? fieldObj.value : '';
+                
+                if (!allowedValues.has(value)) {
+                    shouldShow = false;
+                    break;
+                }
+            }
+            
+            if (shouldShow) visibleRows++;
+        }
+        
+        return ` (${visibleRows} of ${totalRows} rows)`;
+    }
+    
+    return ` (${totalRows} rows)`;
+}
+
+function saveCurrentTabState() {
+    const tab = getActiveTab();
+    if (!tab) return;
+    
+    // Save current results
+    tab.results = currentResults;
+    
+    // Save search state
+    const searchInput = document.getElementById('searchInput');
+    tab.searchQuery = searchInput ? searchInput.value : '';
+    tab.searchIndex = currentSearchMatchIndex || -1;
+    
+    // Save column filters (deep clone the Sets)
+    tab.columnFilters = {};
+    for (const [fieldName, allowedValues] of Object.entries(activeFilters)) {
+        tab.columnFilters[fieldName] = new Set(allowedValues);
+    }
+    
+    // Save scroll position
+    const resultsDiv = document.getElementById('results');
+    tab.scrollPosition = resultsDiv ? resultsDiv.scrollTop : 0;
+    
+    // Save expanded rows
+    const table = resultsDiv ? resultsDiv.querySelector('table tbody') : null;
+    if (table) {
+        tab.expandedRows = new Set();
+        table.querySelectorAll('tr[data-row-index]').forEach(tr => {
+            const next = tr.nextSibling;
+            if (next && next.classList && next.classList.contains('detail-row')) {
+                tab.expandedRows.add(tr.dataset.rowIndex);
+            }
+        });
+    }
+}
+
+function restoreTabState(tab) {
+    if (!tab) return;
+    
+    // Restore results
+    currentResults = tab.results;
+    if (tab.results) {
+        renderResults(tab.results, true); // Skip clearing filters during restore
+        
+        // Restore column filters only if we have results (deep clone the Sets)
+        activeFilters = {};
+        if (tab.columnFilters) {
+            for (const [fieldName, allowedValues] of Object.entries(tab.columnFilters)) {
+                activeFilters[fieldName] = new Set(allowedValues);
+            }
+        }
+        applyColumnFilters();
+        updateFilterIndicators(); // Update column header filter button states
+    } else {
+        const resultsDiv = document.getElementById('results');
+        if (resultsDiv) resultsDiv.innerHTML = '';
+        
+        // Clear filters when no results
+        activeFilters = {};
+    }
+    
+    // Restore search state
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) {
+        searchInput.value = tab.searchQuery || '';
+        if (tab.searchQuery && tab.results) {
+            searchResults();
+        }
+    }
+    
+    // Restore scroll position and expanded rows only if we have results
+    if (tab.results) {
+        setTimeout(() => {
+            const resultsDiv = document.getElementById('results');
+            if (resultsDiv) resultsDiv.scrollTop = tab.scrollPosition || 0;
+            
+            // Restore expanded rows
+            if (tab.expandedRows && tab.expandedRows.size > 0) {
+                const table = resultsDiv ? resultsDiv.querySelector('table tbody') : null;
+                if (table) {
+                    tab.expandedRows.forEach(rowIndex => {
+                        const tr = table.querySelector(`tr[data-row-index="${rowIndex}"]`);
+                        if (tr && tab.results && tab.results.rows) {
+                            const rowData = tab.results.rows[parseInt(rowIndex)];
+                            if (rowData) {
+                                toggleRowDetail(tr, rowData);
+                            }
+                        }
+                    });
+                }
+            }
+        }, 50);
+    }
+}
+
+function switchToTab(tabId) {
+    if (activeTabId === tabId) return;
+    
+    // Save current tab state
+    saveCurrentTabState();
+    
+    // Switch active tab
+    activeTabId = tabId;
+    
+    // Restore new tab state
+    const tab = getActiveTab();
+    restoreTabState(tab);
+    
+    // Update UI
+    renderTabs();
+}
+
+function renderTabs() {
+    const tabList = document.getElementById('tabList');
+    if (!tabList) return;
+    
+    tabList.innerHTML = '';
+    
+    tabs.forEach(tab => {
+        const tabItem = document.createElement('div');
+        tabItem.className = 'tab-item';
+        tabItem.dataset.tabId = tab.id;
+        if (tab.id === activeTabId) tabItem.classList.add('active');
+        if (tab.isStreaming) tabItem.classList.add('streaming');
+        
+        const tabContent = document.createElement('div');
+        tabContent.className = 'tab-content';
+        
+        const tabName = document.createElement('div');
+        tabName.className = 'tab-name';
+        tabName.textContent = tab.name;
+        tabName.title = tab.name;
+        
+        const tabInfo = document.createElement('div');
+        tabInfo.className = 'tab-info';
+        
+        // Calculate row count from results, considering filters
+        if (tab.results && tab.results.rows) {
+            const totalRows = tab.results.rows.length;
+            
+            // Check if this tab has active column filters
+            if (tab.columnFilters && Object.keys(tab.columnFilters).length > 0) {
+                // Calculate visible rows based on filters
+                let visibleRows = 0;
+                for (let i = 0; i < tab.results.rows.length; i++) {
+                    const row = tab.results.rows[i];
+                    let shouldShow = true;
+                    
+                    // Check each active filter
+                    for (const [fieldName, allowedValues] of Object.entries(tab.columnFilters)) {
+                        if (allowedValues.size === 0) {
+                            shouldShow = false;
+                            break;
+                        }
+                        
+                        // Find the field value in the row
+                        const fieldObj = row.fields.find(f => f.field === fieldName);
+                        const value = fieldObj ? fieldObj.value : '';
+                        
+                        if (!allowedValues.has(value)) {
+                            shouldShow = false;
+                            break;
+                        }
+                    }
+                    
+                    if (shouldShow) visibleRows++;
+                }
+                
+                tabInfo.textContent = `${visibleRows} of ${totalRows} rows`;
+            } else {
+                tabInfo.textContent = `${totalRows} rows`;
+            }
+        } else {
+            tabInfo.textContent = 'No data';
+        }
+        
+        tabContent.appendChild(tabName);
+        tabContent.appendChild(tabInfo);
+        
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'tab-close-btn';
+        closeBtn.innerHTML = '×';
+        closeBtn.title = 'Close tab';
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeTab(tab.id);
+        });
+        
+        tabItem.appendChild(tabContent);
+        tabItem.appendChild(closeBtn);
+        
+        tabItem.addEventListener('click', () => switchToTab(tab.id));
+        
+        // Double-click to rename
+        tabContent.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            renameTab(tab.id);
+        });
+        
+        // Right-click context menu
+        tabItem.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showTabContextMenu(e, tab.id);
+        });
+        
+        tabList.appendChild(tabItem);
+    });
+}
+
+function closeTab(tabId) {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+    
+    const tabIndex = tabs.findIndex(t => t.id === tabId);
+    if (tabIndex === -1) return;
+    
+    // Remove tab
+    tabs.splice(tabIndex, 1);
+    
+    // If this was the active tab, switch to another
+    if (activeTabId === tabId) {
+        if (tabs.length > 0) {
+            // Switch to the tab at the same index, or the last tab if out of bounds
+            const newIndex = Math.min(tabIndex, tabs.length - 1);
+            switchToTab(tabs[newIndex].id);
+        } else {
+            // No tabs left, create a new one
+            const newTab = createTab();
+            activeTabId = newTab.id;
+            renderTabs();
+            restoreTabState(newTab);
+        }
+    } else {
+        renderTabs();
+    }
+}
+
+function createNewTab() {
+    // Save current tab state
+    saveCurrentTabState();
+    
+    // Create new tab
+    const newTab = createTab();
+    activeTabId = newTab.id;
+    
+    // Clear results and restore empty state
+    restoreTabState(newTab);
+    renderTabs();
+}
+
+function renameTab(tabId) {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+    
+    const tabItem = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
+    if (!tabItem) return;
+    
+    const tabNameDiv = tabItem.querySelector('.tab-name');
+    if (!tabNameDiv) return;
+    
+    // Create input for renaming
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'tab-rename-input';
+    input.value = tab.name;
+    
+    // Replace the tab name with the input
+    const originalText = tabNameDiv.textContent;
+    tabNameDiv.textContent = '';
+    tabNameDiv.appendChild(input);
+    
+    // Focus and select all text
+    input.focus();
+    input.select();
+    
+    const finishRename = (save) => {
+        if (save && input.value.trim()) {
+            tab.name = input.value.trim();
+            tab.isCustomName = true; // Mark as custom name
+        }
+        renderTabs();
+    };
+    
+    // Handle keyboard events
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            finishRename(true);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            finishRename(false);
+        }
+        e.stopPropagation();
+    });
+    
+    // Save on blur
+    input.addEventListener('blur', () => {
+        finishRename(true);
+    });
+    
+    // Prevent click from bubbling to tab switch
+    input.addEventListener('click', (e) => {
+        e.stopPropagation();
+    });
+}
+
+function showTabContextMenu(event, tabId) {
+    // Remove any existing context menu
+    const existingMenu = document.querySelector('.tab-context-menu');
+    if (existingMenu) existingMenu.remove();
+    
+    // Create context menu
+    const menu = document.createElement('div');
+    menu.className = 'tab-context-menu';
+    menu.style.left = event.pageX + 'px';
+    menu.style.top = event.pageY + 'px';
+    
+    // Rename option
+    const renameItem = document.createElement('div');
+    renameItem.className = 'context-menu-item';
+    renameItem.textContent = 'Rename';
+    renameItem.addEventListener('click', () => {
+        menu.remove();
+        renameTab(tabId);
+    });
+    
+    menu.appendChild(renameItem);
+    document.body.appendChild(menu);
+    
+    // Close menu when clicking outside
+    const closeMenu = (e) => {
+        if (!menu.contains(e.target)) {
+            menu.remove();
+            document.removeEventListener('click', closeMenu);
+        }
+    };
+    
+    // Delay adding the click listener to prevent immediate closing
+    setTimeout(() => {
+        document.addEventListener('click', closeMenu);
+    }, 0);
+}
+
+function setTabStreaming(tabId, isStreaming) {
+    const tab = tabs.find(t => t.id === tabId);
+    if (tab) {
+        tab.isStreaming = isStreaming;
+        renderTabs();
+    }
+}
+
+function updateTabName(tabId, name) {
+    const tab = tabs.find(t => t.id === tabId);
+    if (tab) {
+        tab.name = name;
+        tab.isCustomName = true; // Mark as custom name when explicitly updated
+        renderTabs();
+    }
+}
+
+// ========== END TAB MANAGEMENT ==========
+
 function runQuery() {
-    const { start, end } = currentTimeRange();
+    let start, end;
+    try {
+        const timeRange = currentTimeRange();
+        start = timeRange.start;
+        end = timeRange.end;
+    } catch (error) {
+        setStatus(`⚠ ${error.message}`);
+        // Highlight the absolute time controls to draw attention
+        const absoluteTime = document.querySelector('.absolute-time');
+        if (absoluteTime) {
+            absoluteTime.classList.remove('cwlv-pulse-attention');
+            void absoluteTime.offsetWidth; // Force reflow
+            absoluteTime.classList.add('cwlv-pulse-attention');
+            setTimeout(() => absoluteTime.classList.remove('cwlv-pulse-attention'), 1400);
+        }
+        return;
+    }
+    
     const logGroups = getSelectedLogGroups();
     const region = document.getElementById('region').value.trim() || 'us-east-2';
     const query = getQueryText();
@@ -813,7 +1346,53 @@ function runQuery() {
         setStatus('⚠ Query string is empty');
         return;
     }
-    setStatus('🔄 Running query...');
+    
+    // Tab logic: always overwrite current tab with new query results
+    const currentTab = getActiveTab();
+    let targetTab;
+    
+    if (!currentTab || tabs.length === 0) {
+        // No tabs exist, create first one
+        targetTab = createTab({
+            name: `Query ${formatTimestamp(Date.now())}`,
+            query,
+            logGroups,
+            region,
+            timeRange: { start, end },
+            isStreaming: true
+        });
+        activeTabId = targetTab.id;
+    } else {
+        // Overwrite current tab with new query
+        targetTab = currentTab;
+        // Only update name if it wasn't manually set by user
+        if (!targetTab.isCustomName) {
+            targetTab.name = `Query ${formatTimestamp(Date.now())}`;
+        }
+        targetTab.query = query;
+        targetTab.logGroups = logGroups;
+        targetTab.region = region;
+        targetTab.timeRange = { start, end };
+        targetTab.results = null;
+        targetTab.isStreaming = true;
+        targetTab.searchQuery = '';
+        targetTab.searchIndex = -1;
+        targetTab.columnFilters = {};
+        targetTab.expandedRows = new Set();
+        targetTab.scrollPosition = 0;
+        
+        // Clear current results display
+        const resultsDiv = document.getElementById('results');
+        if (resultsDiv) resultsDiv.innerHTML = '';
+        currentResults = null;
+    }
+    
+    renderTabs();
+    
+    // Track which tab is running the query
+    runningQueryTabId = targetTab.id;
+    
+    setStatus('Running query...');
     if (runBtn) {
         runBtn.setAttribute('data-state', 'running');
         runBtn.disabled = false; // Keep enabled so user can abort
@@ -934,25 +1513,30 @@ function appendPartialResults(partialPayload) {
     });
     
     invalidateRowCache();
-    // Update the count to reflect actual visible rows (accounts for filters/search)
-    const totalRows = currentResults.rows.length;
-    const visibleRows = tbody.querySelectorAll('tr:not(.detail-row):not([style*="display: none"])').length;
-    const resultCount = document.getElementById('resultCount');
-    if (visibleRows !== totalRows) {
-        resultCount.textContent = `(${visibleRows} of ${totalRows} rows, streaming...)`;
-    } else {
-        resultCount.textContent = `(${totalRows} rows, streaming...)`;
+    // Update tab to show current row count during streaming
+    const activeTab = getActiveTab();
+    if (activeTab) {
+        activeTab.results = currentResults;
     }
+    renderTabs();
 }
 
-function renderResults(payload) {
+function renderResults(payload, skipClearFilters = false) {
     currentResults = payload;
     const container = document.getElementById('results');
     container.innerHTML = '';
     // Results changed – invalidate any cached row references used by search
     invalidateRowCache();
-    // Clear column filters when new results are loaded
-    clearAllFilters();
+    // Clear column filters when new results are loaded (unless restoring tab state)
+    if (!skipClearFilters) {
+        clearAllFilters();
+    }
+
+    // Safety check
+    if (!payload || !payload.fieldOrder || !payload.rows) {
+        container.textContent = 'No results.';
+        return;
+    }
 
     // Filter out hidden fields (server can send metadata) default to @ptr only
     const hidden = Array.isArray(payload.hiddenFields) ? payload.hiddenFields : ['@ptr'];
@@ -960,11 +1544,8 @@ function renderResults(payload) {
 
     if (!payload.rows.length) {
         container.textContent = 'No results.';
-        document.getElementById('resultCount').textContent = '';
         return;
     }
-
-    document.getElementById('resultCount').textContent = `(${payload.rows.length} rows)`;
 
     const table = document.createElement('table');
     const head = document.createElement('thead');
@@ -1325,7 +1906,23 @@ function applyColumnFilters() {
         }
     });
 
+    // Update the active tab's column filters (deep clone the Sets)
+    const activeTab = getActiveTab();
+    if (activeTab) {
+        activeTab.columnFilters = {};
+        for (const [fieldName, allowedValues] of Object.entries(activeFilters)) {
+            activeTab.columnFilters[fieldName] = new Set(allowedValues);
+        }
+    }
+
     updateFilteredRowCount();
+    renderTabs(); // Update tab info to show filtered row count
+    
+    // Update status to reflect filtered row count
+    const rowCountText = getRowCountText();
+    if (rowCountText) {
+        setStatus(`✓ Query Complete${rowCountText}`);
+    }
 }
 
 function updateFilterIndicators() {
@@ -1346,15 +1943,8 @@ function updateFilterIndicators() {
 }
 
 function updateFilteredRowCount() {
-    const totalRows = document.querySelectorAll('#results tbody tr:not(.detail-row)').length;
-    const visibleRows = document.querySelectorAll('#results tbody tr:not(.detail-row):not([style*="display: none"])').length;
-    
-    const resultCount = document.getElementById('resultCount');
-    if (totalRows !== visibleRows) {
-        resultCount.textContent = `(${visibleRows} of ${totalRows} rows)`;
-    } else {
-        resultCount.textContent = `(${totalRows} rows)`;
-    }
+    // This function is now deprecated as row counts are shown in tabs
+    // Kept for backwards compatibility - renderTabs() handles the count display
 }
 
 function clearAllFilters() {
@@ -1366,7 +1956,7 @@ function clearAllFilters() {
 function loadLogGroups() {
     const region = document.getElementById('region').value.trim() || 'us-east-2';
     const prefix = document.getElementById('lgFilter').value.trim();
-    setStatus('🔄 Loading log groups...');
+    setStatus('Loading log groups...');
     vscode.postMessage({ type: 'listLogGroups', region, prefix });
 }
 
@@ -1960,7 +2550,6 @@ window.addEventListener('message', (event) => {
                 // Clear results container when starting new query
                 const container = document.getElementById('results');
                 if (container) container.innerHTML = '';
-                document.getElementById('resultCount').textContent = '';
                 currentResults = { rows: [], fieldOrder: [], status: 'Running' };
                 invalidateRowCache();
                 clearAllFilters();
@@ -1973,15 +2562,40 @@ window.addEventListener('message', (event) => {
                     if (label) label.textContent = 'Run Query';
                 }
                 setStatus('⏹ Query aborted');
+                // Mark the query tab as no longer streaming
+                if (runningQueryTabId) {
+                    setTabStreaming(runningQueryTabId, false);
+                    runningQueryTabId = null;
+                }
             }
             break;
         case 'queryPartialResult':
-            // Append partial results incrementally
-            appendPartialResults(msg.data);
+            // Append partial results incrementally to the tab that initiated the query
+            if (runningQueryTabId && activeTabId === runningQueryTabId) {
+                // Only update if we're viewing the tab that's running the query
+                appendPartialResults(msg.data);
+                // Update status with current row count
+                const rowCount = currentResults.rows ? currentResults.rows.length : 0;
+                setStatus(`Running query... (${rowCount} rows)`);
+            } else if (runningQueryTabId) {
+                // Save to the background tab
+                const queryTab = tabs.find(t => t.id === runningQueryTabId);
+                if (queryTab) {
+                    if (!queryTab.results || !queryTab.results.rows) {
+                        queryTab.results = { rows: [], fieldOrder: msg.data.fieldOrder || [], hiddenFields: msg.data.hiddenFields || ['@ptr'] };
+                    }
+                    queryTab.results.rows.push(...msg.data.rows);
+                    queryTab.results.fieldOrder = msg.data.fieldOrder || queryTab.results.fieldOrder;
+                    queryTab.results.hiddenFields = msg.data.hiddenFields || queryTab.results.hiddenFields;
+                    // Update tabs to show streaming row count
+                    renderTabs();
+                    // Update status with background tab row count
+                    const rowCount = queryTab.results.rows.length;
+                    setStatus(`Running query in background tab... (${rowCount} rows)`);
+                }
+            }
             break;
         case 'queryResult':
-            setStatus(`✓ Query ${msg.data.status}`);
-            renderResults(msg.data);
             {
                 const btn = document.getElementById('runBtn');
                 if (btn) {
@@ -1990,6 +2604,24 @@ window.addEventListener('message', (event) => {
                     const label = btn.querySelector('.run-btn-label');
                     if (label) label.textContent = 'Run Query';
                 }
+                
+                // Apply results to the tab that ran the query
+                const queryTab = runningQueryTabId ? tabs.find(t => t.id === runningQueryTabId) : null;
+                if (queryTab) {
+                    queryTab.results = msg.data;
+                    setTabStreaming(queryTab.id, false);
+                    
+                    // Update status with row count
+                    const rowCount = msg.data.rows ? msg.data.rows.length : 0;
+                    setStatus(`✓ Query ${msg.data.status} (${rowCount} rows)`);
+                    
+                    // If we're viewing this tab, render the results
+                    if (activeTabId === runningQueryTabId) {
+                        renderResults(msg.data);
+                    }
+                }
+                
+                runningQueryTabId = null;
             }
             break;
         case 'queryError':
@@ -2001,6 +2633,11 @@ window.addEventListener('message', (event) => {
                     btn.disabled = false;
                     const label = btn.querySelector('.run-btn-label');
                     if (label) label.textContent = 'Run Query';
+                }
+                // Mark the query tab as no longer streaming
+                if (runningQueryTabId) {
+                    setTabStreaming(runningQueryTabId, false);
+                    runningQueryTabId = null;
                 }
             }
             break;
@@ -2026,6 +2663,13 @@ vscode.postMessage({ type: 'getFavorites' });
 loadLogGroups(); // auto-load on startup
 toggleTimeMode(); // initialize time mode visibility
 updateSyntaxHighlighting(); // initialize syntax highlighting
+
+// Initialize tabs - create first tab
+if (tabs.length === 0) {
+    const firstTab = createTab({ name: 'Results' });
+    activeTabId = firstTab.id;
+    renderTabs();
+}
 
 // Note: Previous logic collapsed log groups via a button id (lgCollapseBtn) that no longer exists.
 // Cleaned up to avoid accessing null elements.

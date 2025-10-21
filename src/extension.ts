@@ -435,21 +435,28 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
       </section>
 
       <section class="results-panel">
-        <div class="results-header">
-          <h2>Results <span id="resultCount"></span></h2>
-          <div class="search-controls">
-            <label class="search-toggle">
-              <input type="checkbox" id="searchHideNonMatching" checked />
-              <span>Hide non-matching</span>
-            </label>
-            <input id="searchInput" placeholder="Search in results (Ctrl+F)..." />
-            <span id="searchSpinner" class="search-spinner" title="Searching" aria-hidden="true"></span>
-            <button id="searchPrevBtn" title="Previous match">▲</button>
-            <button id="searchNextBtn" title="Next match">▼</button>
-            <button id="searchClearBtn" title="Clear search">✕</button>
+        <div class="results-header-container">
+          <div class="results-title-and-tabs">
+            <div class="tab-bar">
+              <div class="tab-list" id="tabList"></div>
+              <button id="newTabBtn" class="new-tab-btn" title="New tab (Ctrl+T)">+</button>
+            </div>
+          </div>
+          <div class="results-toolbar">
+            <div id="status" class="status"></div>
+            <div class="search-controls">
+              <label class="search-toggle">
+                <input type="checkbox" id="searchHideNonMatching" checked />
+                <span>Hide non-matching</span>
+              </label>
+              <input id="searchInput" placeholder="Search in results (Ctrl+F)..." />
+              <span id="searchSpinner" class="search-spinner" title="Searching" aria-hidden="true"></span>
+              <button id="searchPrevBtn" title="Previous match">▲</button>
+              <button id="searchNextBtn" title="Next match">▼</button>
+              <button id="searchClearBtn" title="Clear search">✕</button>
+            </div>
           </div>
         </div>
-  <div id="status" class="status"></div>
         <div id="results" class="results"></div>
       </section>
     </main>
