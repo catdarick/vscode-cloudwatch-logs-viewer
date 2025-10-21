@@ -7,6 +7,7 @@ Fast, lightweight panel for exploring CloudWatch Logs: pick log groups, set a ti
 
 ## Key Features (Concise)
 * Multi log group querying (relative presets & absolute UTC range)
+* Paste date/time into Absolute range inputs (auto‑parse many formats)
 * Quick favorites: star frequent log groups per region
 * Inline syntax highlighting (no extra dependencies)
 * Saved queries (AWS Query Definitions with local fallback)
@@ -46,9 +47,11 @@ To change the comment token (default `#`), set the `cloudwatchLogsViewer.comment
 ## Notes
 * Full result set returned (pagination UI not yet implemented).
 * Absolute times interpreted as UTC.
+* When using Absolute time range, you can paste a date/time string into either field and it will parse & fill both. Supported examples: `2025-10-21T14:33:05Z`, `2025-10-21 14:33`, `2025/10/21 14:33:05`, `10/21/2025 2:33 PM`, `21/10/2025 14:33:05`, Unix epoch `1697896205` (seconds) or `1697896205000` (ms), ISO with offsets `2025-10-21T10:33:05-04:00`. If no timezone provided UTC assumed.
 * Falls back to local saved queries if AWS definition APIs not permitted.
 
 ## Changelog
+0.2.4 – Added paste parsing for Absolute time range (multiple date/time formats).
 0.2.0 – Removed deprecated Run Last Query & Save Current Query commands; use the panel buttons instead. Fixed bugs URL metadata.
 0.1.0 – Initial public alpha.
 

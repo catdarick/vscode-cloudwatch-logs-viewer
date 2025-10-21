@@ -242,6 +242,149 @@ function setDateTimeToNow(which) {
     }
 }
 
+// --- Paste-to-parse absolute time helpers ---
+// Allow user to paste a date/time string (various common formats) into either
+// the date or time input and we attempt to parse and populate both fields.
+// Supported examples:
+//   2025-10-21T14:33:05Z
+//   2025-10-21T14:33:05.123Z
+//   2025-10-21 14:33:05
+//   2025-10-21 14:33 (assumes seconds 00)
+//   2025/10/21 14:33:05
+//   10/21/2025 2:33 PM   (US)
+//   21/10/2025 14:33:05  (day-first if first component > 12)
+//   10/21/2025           (defaults time 00:00:00)
+//   1697896205           (epoch seconds)
+//   1697896205000        (epoch milliseconds)
+//   2025-10-21T10:33:05-04:00 (offset)
+// If timezone/offset omitted we assume UTC.
+
+function attachDatePasteHandlers() {
+    ['start', 'end'].forEach(which => {
+        const dateEl = document.getElementById(which + 'Date');
+        const timeEl = document.getElementById(which + 'Time');
+        if (dateEl) dateEl.addEventListener('paste', (e) => handleDatePaste(e, which));
+        if (timeEl) timeEl.addEventListener('paste', (e) => handleDatePaste(e, which));
+    });
+}
+
+function handleDatePaste(e, which) {
+    const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+    if (!text.trim()) return; // let default behavior
+    const parsed = parsePastedDate(text.trim());
+    if (!parsed) {
+        // Try tolerant fallback: Date.parse
+        const fallback = new Date(text.trim());
+        if (isNaN(fallback.getTime())) return; // allow native paste
+        setParsedDate(which, fallback);
+        e.preventDefault();
+        return;
+    }
+    setParsedDate(which, parsed);
+    e.preventDefault(); // prevent raw text from entering field
+}
+
+function setParsedDate(which, dateObj) {
+    const dateEl = document.getElementById(which + 'Date');
+    const timeEl = document.getElementById(which + 'Time');
+    if (!dateEl || !timeEl) return;
+    dateEl.value = formatDateUTC(dateObj);
+    timeEl.value = formatTimeUTC(dateObj);
+    setStatus('✓ Parsed pasted date/time');
+}
+
+function formatDateUTC(d) {
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+function formatTimeUTC(d) {
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const mm = String(d.getUTCMinutes()).padStart(2, '0');
+    const ss = String(d.getUTCSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+}
+
+function parsePastedDate(str) {
+    let s = str.trim();
+    if (!s) return null;
+    // Strip surrounding quotes/backticks
+    s = s.replace(/^["'`]|["'`]$/g, '');
+    // Epoch seconds (10 digits) or ms (13 digits)
+    if (/^\d{10}$/.test(s)) {
+        const secs = parseInt(s, 10);
+        return new Date(secs * 1000);
+    }
+    if (/^\d{13}$/.test(s)) {
+        const ms = parseInt(s, 10);
+        return new Date(ms);
+    }
+    // ISO with T (timezone optional)
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+        // If no timezone specified append Z
+        if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) {
+            s += 'Z';
+        }
+        // Normalize offset -0400 => -04:00
+        s = s.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+        const d = new Date(s);
+        if (!isNaN(d.getTime())) return d;
+    }
+    // Date + space time (YYYY-MM-DD HH:mm[:ss])
+    if (/^\d{4}-\d{2}-\d{2} /.test(s)) {
+        let iso = s.replace(' ', 'T');
+        if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(iso)) iso += 'Z';
+        iso = iso.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+        const d = new Date(iso);
+        if (!isNaN(d.getTime())) return d;
+    }
+    // YYYY/MM/DD formats
+    if (/^\d{4}[/-]\d{1,2}[/-]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/.test(s)) {
+        const parts = s.split(/[ T]/);
+        const datePart = parts[0];
+        const [y, m, dDay] = datePart.split(/[/-]/).map(x => parseInt(x, 10));
+        let hour = 0, min = 0, sec = 0;
+        if (parts[1]) {
+            const timeParts = parts[1].split(':').map(x => parseInt(x, 10));
+            hour = timeParts[0] || 0; min = timeParts[1] || 0; sec = timeParts[2] || 0;
+        }
+        if (m>=1 && m<=12 && dDay>=1 && dDay<=31) {
+            return new Date(Date.UTC(y, m-1, dDay, hour, min, sec));
+        }
+    }
+    // Slash dates mm/dd/yyyy or dd/mm/yyyy (optional time & AM/PM)
+    const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ ,T]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM|am|pm))?)?$/);
+    if (slash) {
+        let a = parseInt(slash[1], 10); // first
+        let b = parseInt(slash[2], 10); // second
+        const year = parseInt(slash[3], 10);
+        let hour = slash[4] ? parseInt(slash[4], 10) : 0;
+        const minute = slash[5] ? parseInt(slash[5], 10) : 0;
+        const second = slash[6] ? parseInt(slash[6], 10) : 0;
+        const ampm = slash[7];
+        let month, day;
+        if (a > 12) { day = a; month = b; } // day-first
+        else if (b > 12) { month = a; day = b; } // month-first
+        else { month = a; day = b; } // ambiguous -> assume month/day
+        if (ampm) {
+            const upper = ampm.toUpperCase();
+            if (upper === 'PM' && hour < 12) hour += 12;
+            if (upper === 'AM' && hour === 12) hour = 0;
+        }
+        if (month>=1 && month<=12 && day>=1 && day<=31) {
+            return new Date(Date.UTC(year, month-1, day, hour, minute, second));
+        }
+    }
+    // Fallback generic parse
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d;
+    return null;
+}
+
+// Attach handlers once DOM is ready (file executes after elements exist)
+attachDatePasteHandlers();
+
 function copyStartToEnd() {
     const startDate = document.getElementById('startDate').value;
     const startTime = document.getElementById('startTime').value;
