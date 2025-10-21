@@ -36,7 +36,24 @@ let relativeValue = 1;
 let relativeUnit = 'hours'; // 'minutes', 'hours', 'days'
 
 // Event listeners
-document.getElementById('runBtn').addEventListener('click', runQuery);
+document.getElementById('runBtn').addEventListener('click', () => {
+    const btn = document.getElementById('runBtn');
+    const state = btn?.getAttribute('data-state');
+    if (state === 'running') {
+        // Cancel/abort running query
+        vscode.postMessage({ type: 'abortQuery' });
+        if (btn) {
+            btn.setAttribute('data-state', 'aborting');
+            btn.disabled = true;
+            const label = btn.querySelector('.run-btn-label');
+            if (label) label.textContent = 'Cancelling Query...';
+        }
+        setStatus('⏸ Cancelling query...');
+    } else {
+        // Start new query
+        runQuery();
+    }
+});
 document.getElementById('lgRefreshBtn').addEventListener('click', loadLogGroups);
 document.getElementById('lgFilter').addEventListener('input', filterLogGroups);
 document.getElementById('savedSelect').addEventListener('change', loadSavedQuery);
@@ -799,7 +816,9 @@ function runQuery() {
     setStatus('🔄 Running query...');
     if (runBtn) {
         runBtn.setAttribute('data-state', 'running');
-        runBtn.disabled = true;
+        runBtn.disabled = false; // Keep enabled so user can abort
+        const label = runBtn.querySelector('.run-btn-label');
+        if (label) label.textContent = 'Cancel Query';
     }
     vscode.postMessage({ type: 'runQuery', data: { logGroups, region, query, startTime: start, endTime: end } });
 }
@@ -1830,7 +1849,21 @@ window.addEventListener('message', (event) => {
             setStatus(msg.data.status);
             if (msg.data.status === 'Running') {
                 const btn = document.getElementById('runBtn');
-                if (btn) { btn.setAttribute('data-state', 'running'); btn.disabled = true; }
+                if (btn) {
+                    btn.setAttribute('data-state', 'running');
+                    btn.disabled = false;
+                    const label = btn.querySelector('.run-btn-label');
+                    if (label) label.textContent = 'Cancel Query';
+                }
+            } else if (msg.data.status === 'Aborted') {
+                const btn = document.getElementById('runBtn');
+                if (btn) {
+                    btn.setAttribute('data-state', 'idle');
+                    btn.disabled = false;
+                    const label = btn.querySelector('.run-btn-label');
+                    if (label) label.textContent = 'Run Query';
+                }
+                setStatus('⏹ Query aborted');
             }
             break;
         case 'queryResult':
@@ -1838,14 +1871,24 @@ window.addEventListener('message', (event) => {
             renderResults(msg.data);
             {
                 const btn = document.getElementById('runBtn');
-                if (btn) { btn.setAttribute('data-state', 'idle'); btn.disabled = false; }
+                if (btn) {
+                    btn.setAttribute('data-state', 'idle');
+                    btn.disabled = false;
+                    const label = btn.querySelector('.run-btn-label');
+                    if (label) label.textContent = 'Run Query';
+                }
             }
             break;
         case 'queryError':
             setStatus('❌ Error: ' + msg.error);
             {
                 const btn = document.getElementById('runBtn');
-                if (btn) { btn.setAttribute('data-state', 'idle'); btn.disabled = false; }
+                if (btn) {
+                    btn.setAttribute('data-state', 'idle');
+                    btn.disabled = false;
+                    const label = btn.querySelector('.run-btn-label');
+                    if (label) label.textContent = 'Run Query';
+                }
             }
             break;
         case 'savedQueries':

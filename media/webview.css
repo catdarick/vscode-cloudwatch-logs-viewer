@@ -947,10 +947,12 @@ button:hover {
   animation: run-spin 0.8s linear infinite;
   display: none;
 }
-#runBtn[data-state="running"] .run-btn-spinner {
+#runBtn[data-state="running"] .run-btn-spinner,
+#runBtn[data-state="aborting"] .run-btn-spinner {
   display: inline-block;
 }
-#runBtn[data-state="running"] .run-btn-icon {
+#runBtn[data-state="running"] .run-btn-icon,
+#runBtn[data-state="aborting"] .run-btn-icon {
   display: none;
 }
 @keyframes run-spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }

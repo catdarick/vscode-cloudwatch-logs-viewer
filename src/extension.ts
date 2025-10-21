@@ -7,6 +7,7 @@ interface FavoriteLogGroup { name: string; region: string; }
 // Messages from webview -> extension
 type WebviewInMessage =
   | { type: 'runQuery'; data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number } }
+  | { type: 'abortQuery' }
   | { type: 'getSavedQueries'; region?: string }
   | { type: 'saveQuery'; data: { id: string; name: string; query: string; logGroups: string[] }; region?: string }
   | { type: 'deleteQuery'; id: string; region?: string }
@@ -77,6 +78,11 @@ function openPanel(context: vscode.ExtensionContext) {
     switch (msg.type) {
       case 'runQuery':
         await handleRunQuery(msg.data, context);
+        break;
+      case 'abortQuery':
+        if (currentQueryAbortController) {
+          currentQueryAbortController.abort();
+        }
         break;
       case 'debugLog': {
         if (!outputChannel) {

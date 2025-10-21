@@ -1,4 +1,4 @@
-import { CloudWatchLogsClient, StartQueryCommand, GetQueryResultsCommand, DescribeLogGroupsCommand, DescribeQueryDefinitionsCommand, PutQueryDefinitionCommand, DeleteQueryDefinitionCommand } from '@aws-sdk/client-cloudwatch-logs';
+import { CloudWatchLogsClient, StartQueryCommand, GetQueryResultsCommand, StopQueryCommand, DescribeLogGroupsCommand, DescribeQueryDefinitionsCommand, PutQueryDefinitionCommand, DeleteQueryDefinitionCommand } from '@aws-sdk/client-cloudwatch-logs';
 
 export interface InsightsQueryParams {
   logGroupNames: string[];
@@ -68,11 +68,25 @@ export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?
 
   const queryId = startResp.queryId;
   const start = Date.now();
-  while (true) {
-    if (abortSignal?.aborted) {
-      throw new Error('Query aborted');
+  
+  // Register abort handler to call StopQuery on AWS side
+  const abortHandler = async () => {
+    try {
+      await client.send(new StopQueryCommand({ queryId }));
+    } catch (err) {
+      // Ignore errors from StopQuery (query may have already completed)
     }
-    const resp = await client.send(new GetQueryResultsCommand({ queryId }));
+  };
+  if (abortSignal) {
+    abortSignal.addEventListener('abort', abortHandler);
+  }
+  
+  try {
+    while (true) {
+      if (abortSignal?.aborted) {
+        throw new Error('Query aborted');
+      }
+      const resp = await client.send(new GetQueryResultsCommand({ queryId }));
     if (resp.status === 'Complete' || resp.status === 'Failed' || resp.status === 'Cancelled' || resp.status === 'Timeout') {
       const rows = (resp.results || []).map(r => ({
         fields: (r || []).map(f => ({ field: f.field || '', value: f.value || '' }))
@@ -91,10 +105,16 @@ export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?
         fieldOrder: ordered
       };
     }
-    if (Date.now() - start > timeoutMs) {
-      throw new Error('Query timeout exceeded');
+      if (Date.now() - start > timeoutMs) {
+        throw new Error('Query timeout exceeded');
+      }
+      await new Promise(r => setTimeout(r, pollIntervalMs));
     }
-    await new Promise(r => setTimeout(r, pollIntervalMs));
+  } finally {
+    // Cleanup abort listener
+    if (abortSignal) {
+      abortSignal.removeEventListener('abort', abortHandler);
+    }
   }
 }
 
