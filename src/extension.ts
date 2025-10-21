@@ -26,6 +26,7 @@ type WebviewOutMessage =
   | { type: 'favorites'; data: FavoriteLogGroup[] }
   | { type: 'queryStatus'; data: { status: string } }
   | { type: 'queryResult'; data: any }
+  | { type: 'queryPartialResult'; data: any }
   | { type: 'queryError'; error: string }
   | { type: 'lastQuery'; query: string | undefined };
 
@@ -233,6 +234,7 @@ async function handleRunQuery(data: { logGroups: string[]; region?: string; quer
       outputChannel?.appendLine('[info] @message field auto-injected (hidden from columns).');
     }
     post({ type: 'queryStatus', data: { status: 'Running' } });
+    const hiddenFields = augmentation.modified ? ['@ptr', '@message'] : ['@ptr'];
     const result = await runInsightsQuery({
       logGroupNames: data.logGroups,
       queryString: augmentation.query,
@@ -241,9 +243,12 @@ async function handleRunQuery(data: { logGroups: string[]; region?: string; quer
       region,
       pollIntervalMs,
       timeoutMs,
+      onPartialResults: (partial) => {
+        // Stream partial results to UI as they arrive
+        post({ type: 'queryPartialResult', data: { ...partial, hiddenFields } });
+      }
     }, currentQueryAbortController.signal);
     // Attach hiddenFields metadata if we injected @message so webview can hide column but still show in detail
-    const hiddenFields = augmentation.modified ? ['@ptr', '@message'] : ['@ptr'];
     post({ type: 'queryResult', data: { ...result, hiddenFields } });
   } catch (err: any) {
     if (err?.name === 'AbortError' || /aborted/i.test(err?.message)) {

@@ -8,6 +8,7 @@ export interface InsightsQueryParams {
   region: string;
   pollIntervalMs: number;
   timeoutMs: number;
+  onPartialResults?: (partialResult: { rows: InsightsQueryResultRow[]; fieldOrder: string[]; status: string }) => void;
 }
 
 export interface QueryResultField {
@@ -52,7 +53,7 @@ export async function listLogGroups(region: string, prefix?: string, limit = 200
 }
 
 export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?: AbortSignal): Promise<InsightsFinalResult> {
-  const { logGroupNames, queryString, startTime, endTime, region, pollIntervalMs, timeoutMs } = params;
+  const { logGroupNames, queryString, startTime, endTime, region, pollIntervalMs, timeoutMs, onPartialResults } = params;
   const client = getClient(region);
 
   const startResp = await client.send(new StartQueryCommand({
@@ -68,6 +69,7 @@ export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?
 
   const queryId = startResp.queryId;
   const start = Date.now();
+  let lastRowCount = 0; // Track how many rows we've already sent
   
   // Register abort handler to call StopQuery on AWS side
   const abortHandler = async () => {
@@ -87,24 +89,37 @@ export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?
         throw new Error('Query aborted');
       }
       const resp = await client.send(new GetQueryResultsCommand({ queryId }));
-    if (resp.status === 'Complete' || resp.status === 'Failed' || resp.status === 'Cancelled' || resp.status === 'Timeout') {
+      
+      // Process current results
       const rows = (resp.results || []).map(r => ({
         fields: (r || []).map(f => ({ field: f.field || '', value: f.value || '' }))
       }));
-      // Collect all fields actually returned
+      
+      // Derive field order from query
       const discovered = new Set<string>();
       rows.forEach(r => r.fields.forEach(f => { if (f.field) discovered.add(f.field); }));
-      // Derive explicit order from query's first `fields` clause
       const explicit = extractFieldsOrder(queryString);
-      // Append any remaining discovered fields not explicitly ordered
       const ordered = [...explicit, ...Array.from(discovered).filter(f => !explicit.includes(f))];
-      return {
-        rows,
-        statistics: resp.statistics as Record<string, unknown> | undefined,
-        status: resp.status || 'Unknown',
-        fieldOrder: ordered
-      };
-    }
+      
+      // Send partial results if we have new rows and a callback
+      if (onPartialResults && rows.length > lastRowCount) {
+        const newRows = rows.slice(lastRowCount);
+        onPartialResults({
+          rows: newRows,
+          fieldOrder: ordered,
+          status: resp.status || 'Running'
+        });
+        lastRowCount = rows.length;
+      }
+      
+      if (resp.status === 'Complete' || resp.status === 'Failed' || resp.status === 'Cancelled' || resp.status === 'Timeout') {
+        return {
+          rows,
+          statistics: resp.statistics as Record<string, unknown> | undefined,
+          status: resp.status || 'Unknown',
+          fieldOrder: ordered
+        };
+      }
       if (Date.now() - start > timeoutMs) {
         throw new Error('Query timeout exceeded');
       }

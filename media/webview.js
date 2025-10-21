@@ -843,6 +843,108 @@ function pulseLogGroupsAttention() {
     } catch (_) { /* ignore */ }
 }
 
+function appendPartialResults(partialPayload) {
+    // Merge new rows into currentResults
+    if (!currentResults || !currentResults.rows) {
+        currentResults = { rows: [], fieldOrder: partialPayload.fieldOrder || [], hiddenFields: partialPayload.hiddenFields || ['@ptr'] };
+    }
+    
+    const startIdx = currentResults.rows.length;
+    currentResults.rows.push(...partialPayload.rows);
+    currentResults.fieldOrder = partialPayload.fieldOrder || currentResults.fieldOrder;
+    currentResults.hiddenFields = partialPayload.hiddenFields || currentResults.hiddenFields;
+    
+    const container = document.getElementById('results');
+    let table = container.querySelector('table');
+    let tbody = table ? table.querySelector('tbody') : null;
+    
+    // Filter out hidden fields
+    const hidden = Array.isArray(currentResults.hiddenFields) ? currentResults.hiddenFields : ['@ptr'];
+    const fields = currentResults.fieldOrder.filter(f => !hidden.includes(f));
+    
+    // Create table if first batch
+    if (!table) {
+        invalidateRowCache();
+        clearAllFilters();
+        
+        table = document.createElement('table');
+        const head = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        
+        const expandHeader = document.createElement('th');
+        expandHeader.className = 'expand-col-header';
+        expandHeader.style.width = '34px';
+        headerRow.appendChild(expandHeader);
+        
+        fields.forEach((f) => {
+            const th = document.createElement('th');
+            th.style.position = 'relative';
+            th.dataset.field = f;
+            const headerContent = document.createElement('div');
+            headerContent.className = 'th-content';
+            const span = document.createElement('span');
+            span.textContent = f;
+            headerContent.appendChild(span);
+            const filterBtn = document.createElement('button');
+            filterBtn.type = 'button';
+            filterBtn.className = 'column-filter-btn';
+            filterBtn.title = `Filter ${f}`;
+            filterBtn.innerHTML = '⋮';
+            filterBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                showColumnFilter(f, filterBtn);
+            });
+            headerContent.appendChild(filterBtn);
+            th.appendChild(headerContent);
+            headerRow.appendChild(th);
+        });
+        
+        head.appendChild(headerRow);
+        table.appendChild(head);
+        tbody = document.createElement('tbody');
+        table.appendChild(tbody);
+        container.innerHTML = '';
+        container.appendChild(table);
+    }
+    
+    // Append new rows to tbody
+    partialPayload.rows.forEach((row, idx) => {
+        const tr = document.createElement('tr');
+        tr.dataset.rowIndex = String(startIdx + idx);
+        
+        const expandCell = document.createElement('td');
+        expandCell.className = 'expand-cell';
+        const expandBtn = document.createElement('button');
+        expandBtn.type = 'button';
+        expandBtn.className = 'expand-btn';
+        expandBtn.innerHTML = '▶';
+        expandBtn.addEventListener('click', () => toggleRowDetail(tr, row));
+        expandCell.appendChild(expandBtn);
+        tr.appendChild(expandCell);
+        
+        fields.forEach(f => {
+            const val = row.fields.find(x => x.field === f)?.value || '';
+            const td = document.createElement('td');
+            td.textContent = val;
+            td.title = val;
+            tr.appendChild(td);
+        });
+        
+        tbody.appendChild(tr);
+    });
+    
+    invalidateRowCache();
+    // Update the count to reflect actual visible rows (accounts for filters/search)
+    const totalRows = currentResults.rows.length;
+    const visibleRows = tbody.querySelectorAll('tr:not(.detail-row):not([style*="display: none"])').length;
+    const resultCount = document.getElementById('resultCount');
+    if (visibleRows !== totalRows) {
+        resultCount.textContent = `(${visibleRows} of ${totalRows} rows, streaming...)`;
+    } else {
+        resultCount.textContent = `(${totalRows} rows, streaming...)`;
+    }
+}
+
 function renderResults(payload) {
     currentResults = payload;
     const container = document.getElementById('results');
@@ -1855,6 +1957,13 @@ window.addEventListener('message', (event) => {
                     const label = btn.querySelector('.run-btn-label');
                     if (label) label.textContent = 'Cancel Query';
                 }
+                // Clear results container when starting new query
+                const container = document.getElementById('results');
+                if (container) container.innerHTML = '';
+                document.getElementById('resultCount').textContent = '';
+                currentResults = { rows: [], fieldOrder: [], status: 'Running' };
+                invalidateRowCache();
+                clearAllFilters();
             } else if (msg.data.status === 'Aborted') {
                 const btn = document.getElementById('runBtn');
                 if (btn) {
@@ -1865,6 +1974,10 @@ window.addEventListener('message', (event) => {
                 }
                 setStatus('⏹ Query aborted');
             }
+            break;
+        case 'queryPartialResult':
+            // Append partial results incrementally
+            appendPartialResults(msg.data);
             break;
         case 'queryResult':
             setStatus(`✓ Query ${msg.data.status}`);
