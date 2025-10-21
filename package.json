@@ -61,11 +61,6 @@
           "type": "number",
           "default": 60000,
           "description": "Maximum time in milliseconds to wait for a query to complete before aborting."
-        },
-        "cloudwatchLogsViewer.commentToken": {
-          "type": "string",
-          "default": "#",
-          "description": "Token used for commenting lines in the query editor (e.g. '#', '//')."
         }
       }
     }

@@ -29,7 +29,7 @@ let currentFavorites = [];
 let currentResults = [];
 let savedQueries = [];
 let savedQueriesSource = 'aws';
-let commentToken = '#';
+const commentToken = '#'; // fixed CloudWatch Logs comment token
 
 // Relative time state
 let relativeValue = 1;
@@ -191,9 +191,7 @@ document.addEventListener('keydown', (e) => {
 // Messages from extension
 window.addEventListener('message', (event) => {
     const msg = event.data || {};
-    if (msg.type === 'config' && msg.data) {
-        if (typeof msg.data.commentToken === 'string') commentToken = msg.data.commentToken || '#';
-    } else if (msg.type === 'toggleComment') {
+    if (msg.type === 'toggleComment') {
         toggleCommentInQueryEditor();
     } else if (msg.type === 'lastQuery') {
         if (typeof msg.query === 'string' && msg.query.trim()) {
@@ -218,14 +216,33 @@ function toggleCommentInQueryEditor() {
     }
     const block = text.slice(selStart, selEnd);
     const lines = block.split('\n');
-    const tokenRegex = new RegExp('^([\t ]*)' + escapeForRegex(commentToken) + '(?:\s?)');
     const nonEmpty = lines.filter(l => l.trim() !== '');
-    const allCommented = nonEmpty.length > 0 && nonEmpty.every(l => tokenRegex.test(l));
+    // A line is considered commented if, after leading indentation, it begins with the token.
+    const isCommented = (l) => {
+        const indentMatch = /^[\t ]*/.exec(l) || [''];
+        const afterIndent = l.slice(indentMatch[0].length);
+        return afterIndent.startsWith(commentToken);
+    };
+    const allCommented = nonEmpty.length > 0 && nonEmpty.every(isCommented);
     const out = lines.map(line => {
         if (line.trim() === '') return line;
-        if (allCommented) return line.replace(tokenRegex, '$1');
-        const indent = (/^[\t ]*/.exec(line) || [''])[0];
-        return indent + commentToken + (commentToken.endsWith(' ') ? '' : ' ') + line.slice(indent.length);
+        const indentMatch = /^[\t ]*/.exec(line) || [''];
+        const indent = indentMatch[0];
+        const afterIndent = line.slice(indent.length);
+        if (allCommented) {
+            if (afterIndent.startsWith(commentToken)) {
+                // Remove token and a single following space if present, but preserve additional spacing beyond one
+                let remainder = afterIndent.slice(commentToken.length);
+                if (remainder.startsWith(' ')) remainder = remainder.slice(1); // only remove one space
+                return indent + remainder;
+            }
+            return line;
+        } else {
+            // Comment path: don't double comment
+            if (afterIndent.startsWith(commentToken)) return line;
+            const spacer = commentToken.endsWith(' ') ? '' : ' ';
+            return indent + commentToken + spacer + afterIndent;
+        }
     }).join('\n');
     editor.value = text.slice(0, selStart) + out + text.slice(selEnd);
     editor.selectionStart = selStart;

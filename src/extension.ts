@@ -26,7 +26,6 @@ type WebviewOutMessage =
   | { type: 'queryStatus'; data: { status: string } }
   | { type: 'queryResult'; data: any }
   | { type: 'queryError'; error: string }
-  | { type: 'config'; data: { commentToken: string } }
   | { type: 'lastQuery'; query: string | undefined };
 
 const SAVED_KEY = 'cloudwatchLogsViewer.savedQueries';
@@ -150,9 +149,6 @@ function openPanel(context: vscode.ExtensionContext) {
         break;
     }
   });
-  const config = vscode.workspace.getConfiguration();
-  const commentToken = config.get('cloudwatchLogsViewer.commentToken') as string || '#';
-  panel.webview.postMessage({ type: 'config', data: { commentToken } });
   // Also send previously edited last query (if any)
   const lastQuery = context.globalState.get<string>(LAST_QUERY_KEY, '') || undefined;
   if (lastQuery) {

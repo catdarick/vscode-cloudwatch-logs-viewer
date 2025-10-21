@@ -29,13 +29,10 @@ Optional for saved queries: `logs:DescribeQueryDefinitions`, `logs:PutQueryDefin
 cloudwatchLogsViewer.defaultRegion        (string, default us-east-1)
 cloudwatchLogsViewer.queryPollIntervalMs  (number, default 1000)
 cloudwatchLogsViewer.queryTimeoutMs       (number, default 60000)
-cloudwatchLogsViewer.commentToken         (string, default '#')
 ```
 
 ### Query Editor Comment Shortcut
-Use Cmd+/ (macOS) or Ctrl+/ (Windows/Linux) to toggle comments on the selected lines (or current line) inside the query editor. You can override the keybinding in your personal `keybindings.json` targeting `cloudwatchLogsViewer.toggleComment` with the `when` clause `cloudwatchLogsViewerFocus`.
-
-To change the comment token (default `#`), set the `cloudwatchLogsViewer.commentToken` setting (e.g. to `//`).
+Use Cmd+/ (macOS) or Ctrl+/ (Windows/Linux) to toggle comments on the selected lines (or current line) inside the query editor. You can override the keybinding in your personal `keybindings.json` targeting `cloudwatchLogsViewer.toggleComment` with the `when` clause `cloudwatchLogsViewerFocus`. Comment token is fixed to `#` for CloudWatch Logs Insights.
 
 ## Quick Start
 1. Open the command palette and run: CloudWatch Logs: Open Viewer.
