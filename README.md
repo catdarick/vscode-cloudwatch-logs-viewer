@@ -8,6 +8,7 @@ Fast, lightweight panel for exploring CloudWatch Logs: pick log groups, set a ti
 ## Key Features (Concise)
 * Multi log group querying (relative presets & absolute UTC range)
 * Paste date/time into Absolute range inputs (auto‑parse many formats)
+* Automatically restores your last edited query when reopening the viewer
 * Quick favorites: star frequent log groups per region
 * Inline syntax highlighting (no extra dependencies)
 * Saved queries (AWS Query Definitions with local fallback)

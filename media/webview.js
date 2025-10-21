@@ -155,7 +155,10 @@ const queryEditor = document.getElementById('query');
 const queryHighlight = document.getElementById('queryHighlight');
 
 // Update syntax highlighting on input
-queryEditor.addEventListener('input', updateSyntaxHighlighting);
+queryEditor.addEventListener('input', (e) => {
+    updateSyntaxHighlighting();
+    schedulePersistLastQuery();
+});
 queryEditor.addEventListener('scroll', syncScroll);
 
 function syncScroll() {
@@ -192,6 +195,10 @@ window.addEventListener('message', (event) => {
         if (typeof msg.data.commentToken === 'string') commentToken = msg.data.commentToken || '#';
     } else if (msg.type === 'toggleComment') {
         toggleCommentInQueryEditor();
+    } else if (msg.type === 'lastQuery') {
+        if (typeof msg.query === 'string' && msg.query.trim()) {
+            setQueryText(msg.query);
+        }
     }
 });
 function toggleCommentInQueryEditor() {
@@ -743,6 +750,18 @@ function setQueryText(text) {
     const editor = document.getElementById('query');
     editor.value = text;
     updateSyntaxHighlighting();
+}
+
+// Debounced persistence of last edited query to extension
+let persistTimer = null;
+function schedulePersistLastQuery() {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+        try {
+            const q = getQueryText();
+            vscode.postMessage({ type: 'updateLastQuery', query: q });
+        } catch (_) { /* ignore */ }
+    }, 400); // 400ms debounce
 }
 
 function runQuery() {

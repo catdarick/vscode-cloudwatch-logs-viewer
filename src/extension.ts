@@ -14,7 +14,8 @@ type WebviewInMessage =
   | { type: 'getFavorites' }
   | { type: 'addFavorite'; data: FavoriteLogGroup }
   | { type: 'removeFavorite'; name: string; region: string }
-  | { type: 'debugLog'; message: string };
+  | { type: 'debugLog'; message: string }
+  | { type: 'updateLastQuery'; query: string };
 
 // Outgoing messages (subset typed for clarity)
 type WebviewOutMessage =
@@ -25,10 +26,12 @@ type WebviewOutMessage =
   | { type: 'queryStatus'; data: { status: string } }
   | { type: 'queryResult'; data: any }
   | { type: 'queryError'; error: string }
-  | { type: 'config'; data: { commentToken: string } };
+  | { type: 'config'; data: { commentToken: string } }
+  | { type: 'lastQuery'; query: string | undefined };
 
 const SAVED_KEY = 'cloudwatchLogsViewer.savedQueries';
 const FAVORITES_KEY = 'cloudwatchLogsViewer.favoriteLogGroups';
+const LAST_QUERY_KEY = 'cloudwatchLogsViewer.lastQuery';
 
 export function activate(context: vscode.ExtensionContext) {
   const openCmd = vscode.commands.registerCommand('cloudwatchLogsViewer.open', () => openPanel(context));
@@ -142,11 +145,19 @@ function openPanel(context: vscode.ExtensionContext) {
         removeFavorite(context, msg.name, msg.region);
         post({ type: 'favorites', data: getFavorites(context) });
         break;
+      case 'updateLastQuery':
+        context.globalState.update(LAST_QUERY_KEY, msg.query || '');
+        break;
     }
   });
   const config = vscode.workspace.getConfiguration();
   const commentToken = config.get('cloudwatchLogsViewer.commentToken') as string || '#';
   panel.webview.postMessage({ type: 'config', data: { commentToken } });
+  // Also send previously edited last query (if any)
+  const lastQuery = context.globalState.get<string>(LAST_QUERY_KEY, '') || undefined;
+  if (lastQuery) {
+    panel.webview.postMessage({ type: 'lastQuery', query: lastQuery });
+  }
 }
 
 function getSaved(context: vscode.ExtensionContext): SavedQuery[] {
