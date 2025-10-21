@@ -24,14 +24,19 @@ type WebviewOutMessage =
   | { type: 'favorites'; data: FavoriteLogGroup[] }
   | { type: 'queryStatus'; data: { status: string } }
   | { type: 'queryResult'; data: any }
-  | { type: 'queryError'; error: string };
+  | { type: 'queryError'; error: string }
+  | { type: 'config'; data: { commentToken: string } };
 
 const SAVED_KEY = 'cloudwatchLogsViewer.savedQueries';
 const FAVORITES_KEY = 'cloudwatchLogsViewer.favoriteLogGroups';
 
 export function activate(context: vscode.ExtensionContext) {
   const openCmd = vscode.commands.registerCommand('cloudwatchLogsViewer.open', () => openPanel(context));
-  context.subscriptions.push(openCmd);
+  const toggleCommentCmd = vscode.commands.registerCommand('cloudwatchLogsViewer.toggleComment', () => {
+    ensurePanel(context);
+    panel?.webview.postMessage({ type: 'toggleComment' });
+  });
+  context.subscriptions.push(openCmd, toggleCommentCmd);
 }
 
 export function deactivate() { }
@@ -58,7 +63,13 @@ function openPanel(context: vscode.ExtensionContext) {
     enableScripts: true,
     retainContextWhenHidden: true,
   });
-  panel.onDidDispose(() => { panel = undefined; });
+  panel.onDidDispose(() => {
+    panel = undefined;
+    vscode.commands.executeCommand('setContext', 'cloudwatchLogsViewerFocus', false);
+  });
+  panel.onDidChangeViewState(e => {
+    vscode.commands.executeCommand('setContext', 'cloudwatchLogsViewerFocus', e.webviewPanel.active);
+  });
   panel.webview.html = getHtml(panel.webview, context.extensionUri);
   panel.webview.onDidReceiveMessage(async (msg: WebviewInMessage) => {
     switch (msg.type) {
@@ -133,6 +144,9 @@ function openPanel(context: vscode.ExtensionContext) {
         break;
     }
   });
+  const config = vscode.workspace.getConfiguration();
+  const commentToken = config.get('cloudwatchLogsViewer.commentToken') as string || '#';
+  panel.webview.postMessage({ type: 'config', data: { commentToken } });
 }
 
 function getSaved(context: vscode.ExtensionContext): SavedQuery[] {

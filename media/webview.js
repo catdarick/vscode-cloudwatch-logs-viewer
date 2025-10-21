@@ -29,6 +29,7 @@ let currentFavorites = [];
 let currentResults = [];
 let savedQueries = [];
 let savedQueriesSource = 'aws';
+let commentToken = '#';
 
 // Relative time state
 let relativeValue = 1;
@@ -184,6 +185,47 @@ document.addEventListener('keydown', (e) => {
         document.getElementById('searchInput').focus();
     }
 });
+// Messages from extension
+window.addEventListener('message', (event) => {
+    const msg = event.data || {};
+    if (msg.type === 'config' && msg.data) {
+        if (typeof msg.data.commentToken === 'string') commentToken = msg.data.commentToken || '#';
+    } else if (msg.type === 'toggleComment') {
+        toggleCommentInQueryEditor();
+    }
+});
+function toggleCommentInQueryEditor() {
+    const editor = queryEditor;
+    if (!editor) return;
+    const text = editor.value;
+    let selStart = editor.selectionStart;
+    let selEnd = editor.selectionEnd;
+    if (selStart === selEnd) {
+        selStart = text.lastIndexOf('\n', selStart - 1) + 1;
+        const next = text.indexOf('\n', selEnd);
+        selEnd = next === -1 ? text.length : next;
+    } else {
+        selStart = text.lastIndexOf('\n', selStart - 1) + 1;
+        const after = text.indexOf('\n', selEnd);
+        selEnd = after === -1 ? text.length : after;
+    }
+    const block = text.slice(selStart, selEnd);
+    const lines = block.split('\n');
+    const tokenRegex = new RegExp('^([\t ]*)' + escapeForRegex(commentToken) + '(?:\s?)');
+    const nonEmpty = lines.filter(l => l.trim() !== '');
+    const allCommented = nonEmpty.length > 0 && nonEmpty.every(l => tokenRegex.test(l));
+    const out = lines.map(line => {
+        if (line.trim() === '') return line;
+        if (allCommented) return line.replace(tokenRegex, '$1');
+        const indent = (/^[\t ]*/.exec(line) || [''])[0];
+        return indent + commentToken + (commentToken.endsWith(' ') ? '' : ' ') + line.slice(indent.length);
+    }).join('\n');
+    editor.value = text.slice(0, selStart) + out + text.slice(selEnd);
+    editor.selectionStart = selStart;
+    editor.selectionEnd = selStart + out.length;
+    updateSyntaxHighlighting();
+}
+function escapeForRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 // Functions
 function setDateTimeToNow(which) {

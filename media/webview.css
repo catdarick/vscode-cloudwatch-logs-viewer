@@ -792,6 +792,8 @@ tr.row-hidden { display: none !important; }
 
 .code-editor::selection {
   background: var(--vscode-editor-selectionBackground);
+  color: var(--vscode-editor-selectionForeground, #ffffff);
+  -webkit-text-fill-color: var(--vscode-editor-selectionForeground, #ffffff);
 }
 
 .code-editor::placeholder {
