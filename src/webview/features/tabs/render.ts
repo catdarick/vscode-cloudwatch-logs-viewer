@@ -19,18 +19,6 @@ export function renderTabs() {
     tabName.textContent = tab.name;
     tabName.title = tab.name;
     
-    // Click handler to prevent tab switching when clicking on tab name
-    tabName.addEventListener('click', (e: Event) => {
-      e.stopPropagation();
-    });
-    
-    // Double-click to rename
-    tabName.addEventListener('dblclick', (e: Event) => {
-      e.preventDefault();
-      e.stopPropagation();
-      startRenaming(tab.id, tabName);
-    });
-    
     const tabInfo = document.createElement('div');
     tabInfo.className = 'tab-info';
     if (tab.results?.rows) {
@@ -67,6 +55,23 @@ export function renderTabs() {
     tabItem.appendChild(tabContent);
     tabItem.appendChild(closeBtn);
     
+    // Click to switch tabs (but not on second click of double-click)
+    tabItem.addEventListener('click', (e: MouseEvent) => {
+      if (e.detail === 1) {
+        const evt = new CustomEvent('cwlv:switch-tab', { detail: { id: tab.id } });
+        window.dispatchEvent(evt);
+      }
+    });
+    
+    // Double-click to rename (only works on active tab)
+    tabItem.addEventListener('dblclick', (e: Event) => {
+      const currentState = getState();
+      if (tab.id === currentState.activeTabId) {
+        e.preventDefault();
+        startRenaming(tab.id, tabName);
+      }
+    });
+    
     // Context menu
     tabItem.addEventListener('contextmenu', (e: MouseEvent) => {
       e.preventDefault();
@@ -74,10 +79,15 @@ export function renderTabs() {
       showContextMenu(e, tab.id);
     });
     
-    tabItem.addEventListener('click', () => {
-      const evt = new CustomEvent('cwlv:switch-tab', { detail: { id: tab.id } });
-      window.dispatchEvent(evt);
+    // Click to switch tabs - use detail to detect double-clicks
+    tabItem.addEventListener('click', (e: MouseEvent) => {
+      // Don't switch if this is a double-click (detail === 2)
+      if (e.detail !== 2) {
+        const evt = new CustomEvent('cwlv:switch-tab', { detail: { id: tab.id } });
+        window.dispatchEvent(evt);
+      }
     });
+    
     tabList.appendChild(tabItem);
   });
 }

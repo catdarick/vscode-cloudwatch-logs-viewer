@@ -203,14 +203,6 @@
       tabName.className = "tab-name";
       tabName.textContent = tab.name;
       tabName.title = tab.name;
-      tabName.addEventListener("click", (e) => {
-        e.stopPropagation();
-      });
-      tabName.addEventListener("dblclick", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        startRenaming(tab.id, tabName);
-      });
       const tabInfo = document.createElement("div");
       tabInfo.className = "tab-info";
       if (tab.results?.rows) {
@@ -249,14 +241,29 @@
       });
       tabItem.appendChild(tabContent);
       tabItem.appendChild(closeBtn);
+      tabItem.addEventListener("click", (e) => {
+        if (e.detail === 1) {
+          const evt = new CustomEvent("cwlv:switch-tab", { detail: { id: tab.id } });
+          window.dispatchEvent(evt);
+        }
+      });
+      tabItem.addEventListener("dblclick", (e) => {
+        const currentState = getState();
+        if (tab.id === currentState.activeTabId) {
+          e.preventDefault();
+          startRenaming(tab.id, tabName);
+        }
+      });
       tabItem.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         e.stopPropagation();
         showContextMenu(e, tab.id);
       });
-      tabItem.addEventListener("click", () => {
-        const evt = new CustomEvent("cwlv:switch-tab", { detail: { id: tab.id } });
-        window.dispatchEvent(evt);
+      tabItem.addEventListener("click", (e) => {
+        if (e.detail !== 2) {
+          const evt = new CustomEvent("cwlv:switch-tab", { detail: { id: tab.id } });
+          window.dispatchEvent(evt);
+        }
       });
       tabList.appendChild(tabItem);
     });

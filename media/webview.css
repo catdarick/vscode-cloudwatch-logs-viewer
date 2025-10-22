@@ -1619,7 +1619,7 @@ td.expand-cell { padding: 0.15rem 0.25rem; vertical-align: middle; }
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.2;
-  cursor: text;
+  cursor: pointer;
   user-select: none;
 }
 
