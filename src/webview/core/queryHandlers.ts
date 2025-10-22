@@ -1,9 +1,9 @@
 import { on } from './messaging';
-import { appendPartialResults, renderResults } from '../features/results/render';
+import { renderResults } from '../features/results/render';
 import { scheduleSearchRerun } from '../features/search/search';
 import { initFiltersForNewResults } from '../features/results/filters';
 import { notifyInfo, notifyError } from '../components/status';
-import { getState, setRunningQueryTab, setTabError, setTabStatus } from './state';
+import { getState, setTabError, setTabStatus } from './state';
 import { renderFavorites, updateStarButtons } from '../features/favorites/favorites';
 import { renderSavedQueries } from '../features/savedQueries/savedQueries';
 import { renderLogGroups } from '../features/logGroups/logGroups';
@@ -12,21 +12,12 @@ import { renderTabs } from '../features/tabs/render';
 import { RunButton } from '../components/controls';
 
 export function initQueryHandlers() {
-  on('queryPartialResult', (msg) => {
-    appendPartialResults(msg.data);
-    // Update tab UI to show streaming state
-    renderTabs();
-  });
-  
   on('queryResult', (msg) => {
     renderResults(msg.data);
     initFiltersForNewResults();
     scheduleSearchRerun();
     
-    // Clear running query tab tracking
-    setRunningQueryTab(null);
-    
-    // Update tab UI to show final results and clear streaming state
+    // Update tab UI to show final results
     renderTabs();
     
     // Reset run button after final results
@@ -37,14 +28,11 @@ export function initQueryHandlers() {
   on('queryError', (msg) => {
     notifyError(msg.error);
     const s = getState();
-    // Update the tab that owns the running query using state action
-    const targetTabId = s.runningQueryTabId ?? s.activeTabId;
+    // Update the active tab with error
+    const targetTabId = s.activeTabId;
     if (targetTabId != null) {
       setTabError(s, targetTabId, msg.error);
     }
-    
-    // Clear running query tab tracking
-    setRunningQueryTab(null);
     
     // Update tab UI to show error state
     renderTabs();
@@ -56,17 +44,14 @@ export function initQueryHandlers() {
   on('queryStatus', (msg) => {
     notifyInfo(msg.data.status);
     const s = getState();
-    // Update the tab that owns the running query using state action
-    const targetTabId = s.runningQueryTabId ?? s.activeTabId;
+    // Update the active tab with status
+    const targetTabId = s.activeTabId;
     if (targetTabId != null) {
       setTabStatus(s, targetTabId, msg.data.status);
     }
     
     // Reset button on completion or cancellation
     if (/Complete|Cancel|Abort|Stop/i.test(msg.data.status)) {
-      // Clear running query tab tracking
-      setRunningQueryTab(null);
-      
       // Update tab UI
       renderTabs();
       

@@ -8,7 +8,6 @@ export interface InsightsQueryParams {
   region: string;
   pollIntervalMs: number;
   timeoutMs: number;
-  onPartialResults?: (partialResult: { rows: InsightsQueryResultRow[]; fieldOrder: string[]; status: string }) => void;
 }
 
 export interface QueryResultField {
@@ -53,7 +52,7 @@ export async function listLogGroups(region: string, prefix?: string, limit = 200
 }
 
 export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?: AbortSignal): Promise<InsightsFinalResult> {
-  const { logGroupNames, queryString, startTime, endTime, region, pollIntervalMs, timeoutMs, onPartialResults } = params;
+  const { logGroupNames, queryString, startTime, endTime, region, pollIntervalMs, timeoutMs } = params;
   const client = getClient(region);
 
   const startResp = await client.send(new StartQueryCommand({
@@ -89,12 +88,10 @@ export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?
         throw new Error('Query aborted');
       }
       
-      const apiCallStart = Date.now();
       const describeResp = await client.send(new DescribeQueriesCommand({ 
         logGroupName: logGroupNames[0],
         maxResults: 10
       }));
-      const apiCallDuration = Date.now() - apiCallStart;
       
       // Find our query in the results
       const queryInfo = describeResp.queries?.find(q => q.queryId === queryId);
@@ -108,9 +105,7 @@ export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?
       
       if (isTerminal) {
         // Query finished - fetch results once
-        const resultsStart = Date.now();
         const resp = await client.send(new GetQueryResultsCommand({ queryId }));
-        const resultsDuration = Date.now() - resultsStart;
         
         const rows = (resp.results || []).map(r => ({
           fields: (r || []).map(f => ({ field: f.field || '', value: f.value || '' }))

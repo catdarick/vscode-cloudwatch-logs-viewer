@@ -83,7 +83,6 @@ Results table rendering, interaction, and management.
 - ⚠️ **DO NOT MODIFY** column resize algorithm without testing
 - Table uses event delegation for scalability (thousands of rows)
 - Virtual scrolling not implemented (not needed for typical datasets)
-- Streaming append for partial results (no full rebuild)
 
 **State:**
 - Results stored per-tab in `TabState.results`
@@ -92,10 +91,9 @@ Results table rendering, interaction, and management.
 
 **Usage:**
 ```typescript
-import { renderResults, appendPartialResults } from './features/results/render';
+import { renderResults } from './features/results/render';
 
 renderResults(queryResults); // Render complete results
-appendPartialResults(partialResults); // Append streaming batch
 ```
 
 **Features:**
@@ -103,7 +101,6 @@ appendPartialResults(partialResults); // Append streaming batch
 - Resizable columns (drag resize handle)
 - Row expansion for full field details
 - Column filtering with multi-select
-- Streaming results (incremental append)
 
 ---
 

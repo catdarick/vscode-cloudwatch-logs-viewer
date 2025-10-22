@@ -18,7 +18,6 @@ export interface UpdateTabOptions {
   logGroups?: string[];
   region?: string;
   status?: string;
-  isStreaming?: boolean;
   results?: QueryResults | null;
   searchQuery?: string;
   searchIndex?: number;
@@ -65,7 +64,6 @@ export function resetTabForNewQuery(
   tab.region = region;
   tab.timeRange = timeRange;
   tab.results = null;
-  tab.isStreaming = true;
   tab.searchQuery = '';
   tab.searchIndex = -1;
   tab.columnFilters = {};
@@ -88,7 +86,6 @@ export function completeTabQuery(
   if (!tab) return false;
 
   tab.results = results;
-  tab.isStreaming = false;
   tab.status = `✓ Query Complete (${results.rows.length} rows)`;
 
   return true;
@@ -106,27 +103,22 @@ export function setTabError(
   if (!tab) return false;
 
   tab.status = `Error: ${error}`;
-  tab.isStreaming = false;
 
   return true;
 }
 
 /**
- * Set a tab's streaming status and status message.
+ * Set a tab's status message.
  */
 export function setTabStatus(
   state: AppState,
   tabId: number,
-  status: string,
-  isStreaming?: boolean
+  status: string
 ): boolean {
   const tab = state.tabs.find(t => t.id === tabId);
   if (!tab) return false;
 
   tab.status = status;
-  if (isStreaming !== undefined) {
-    tab.isStreaming = isStreaming;
-  }
 
   return true;
 }

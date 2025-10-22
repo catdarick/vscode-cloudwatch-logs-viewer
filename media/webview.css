@@ -1689,34 +1689,6 @@ td.expand-cell { padding: 0.15rem 0.25rem; vertical-align: middle; }
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
-.tab-item.streaming {
-  position: relative;
-  animation: tabPulse 2s ease-in-out infinite;
-}
-
-@keyframes tabPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.85; }
-}
-
-.tab-item.streaming::after {
-  content: '';
-  position: absolute;
-  bottom: 2px;
-  left: 8px;
-  right: 8px;
-  height: 2px;
-  background: var(--vscode-progressBar-background);
-  border-radius: 1px;
-  animation: streamProgress 1.5s ease-in-out infinite;
-}
-
-@keyframes streamProgress {
-  0% { opacity: 0.3; transform: scaleX(0.3); }
-  50% { opacity: 1; transform: scaleX(1); }
-  100% { opacity: 0.3; transform: scaleX(0.3); }
-}
-
 /* Tab rename input */
 .tab-rename-input {
   width: 100%;

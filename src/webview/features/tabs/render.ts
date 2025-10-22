@@ -1,5 +1,4 @@
 import { getState } from '../../core/state';
-import { getActiveTab } from './model';
 
 export function renderTabs() {
   const tabList = document.getElementById('tabList');
@@ -11,7 +10,6 @@ export function renderTabs() {
     tabItem.className = 'tab-item';
     tabItem.dataset.tabId = String(tab.id);
     if (tab.id === state.activeTabId) tabItem.classList.add('active');
-    if (tab.isStreaming) tabItem.classList.add('streaming');
 
     const tabContent = document.createElement('div');
     tabContent.className = 'tab-content';

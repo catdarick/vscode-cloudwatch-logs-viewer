@@ -13,7 +13,6 @@ export type ExtensionToWebviewMessage =
   | { type: 'favorites'; data: Favorite[] }
   | { type: 'queryStatus'; data: { status: string } }
   | { type: 'queryResult'; data: QueryResults }
-  | { type: 'queryPartialResult'; data: QueryResults }
   | { type: 'queryError'; error: string }
   | { type: 'lastQuery'; query: string | undefined }
   | { type: 'toggleComment' };

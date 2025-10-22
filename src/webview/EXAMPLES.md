@@ -26,8 +26,7 @@ import { updateTab, getState } from '../../core/state';
 function setTabLoading(tabId: number) {
   const s = getState();
   updateTab(s, tabId, {
-    status: 'Loading...',
-    isStreaming: true
+    status: 'Loading...'
   });
 }
 ```
@@ -329,15 +328,6 @@ renderResults(queryResults, false, tabId);
 renderResults(queryResults, true);
 ```
 
-### Append Partial Results (Streaming)
-
-```typescript
-import { appendPartialResults } from '../../features/results/render';
-
-// Append streaming batch
-appendPartialResults(partialResults);
-```
-
 ### Render Tabs
 
 ```typescript
@@ -472,7 +462,7 @@ describe('State Actions', () => {
     
     expect(tab.query).toBe('fields @timestamp');
     expect(tab.results).toBeNull();
-    expect(tab.isStreaming).toBe(true);
+    expect(tab.query).toBe(query);
   });
 });
 ```
@@ -686,7 +676,6 @@ tbody.addEventListener('click', (e) => {
 
 ### Rendering
 - `renderResults()` - Render complete results
-- `appendPartialResults()` - Append streaming batch
 - `renderTabs()` - Re-render tab bar
 - `TableBuilder` - Build table DOM
 - `TableEventBinder` - Bind table events
@@ -694,3 +683,5 @@ tbody.addEventListener('click', (e) => {
 ---
 
 **Need more help?** Check `ARCHITECTURE.md` for overall patterns or `features/README.md` for feature-specific documentation.
+
+```

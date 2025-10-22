@@ -28,7 +28,7 @@ export interface TabState {
   logGroups: string[];          // selected log groups at execution time
   region: string;               // AWS region
   timeRange: TimeRange;         // stored execution range
-  results: QueryResults | null; // last results (may be partial while streaming)
+  results: QueryResults | null; // last results
   searchQuery: string;          // last search term in this tab
   searchIndex: number;          // current match index
   searchHideNonMatching: boolean; // hide rows that don't match search
@@ -39,14 +39,12 @@ export interface TabState {
   columnFilters: Record<string, Set<string>>; // per-column selected values
   expandedRows: Set<number>;    // row indices expanded for detail view
   scrollPosition: number;       // vertical scroll offset in results container
-  isStreaming: boolean;         // query still receiving partial batches
   status: string;               // status message snapshot
 }
 
 export interface AppState {
   tabs: TabState[];
   activeTabId: number | null;
-  runningQueryTabId: number | null; // which tab currently owns streaming query
   nextTabId: number;
   favorites: Favorite[];
   savedQueries: SavedQuery[];
@@ -76,7 +74,6 @@ export function createInitialTab(id: number): TabState {
     columnFilters: {},
     expandedRows: new Set<number>(),
     scrollPosition: 0,
-    isStreaming: false,
     status: ''
   };
 }
@@ -85,7 +82,6 @@ export function createInitialAppState(): AppState {
   return {
     tabs: [],
     activeTabId: null,
-    runningQueryTabId: null,
     nextTabId: 1,
     favorites: [],
     savedQueries: [],

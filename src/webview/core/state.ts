@@ -62,19 +62,9 @@ export function closeTab(id: number): void {
   }
 }
 
-// ---- Running Query Tracking ----
-export function setRunningQueryTab(id: number | null) {
-  state.runningQueryTabId = id;
-}
-
 // ---- Additional Selectors ----
 export function getTabById(id: number): TabState | undefined {
   return state.tabs.find(t => t.id === id);
-}
-
-export function getRunningQueryTab(): TabState | undefined {
-  if (state.runningQueryTabId === null) return undefined;
-  return getTabById(state.runningQueryTabId);
 }
 
 export function getAllTabs(): readonly TabState[] {
@@ -83,16 +73,6 @@ export function getAllTabs(): readonly TabState[] {
 
 export function getTabCount(): number {
   return state.tabs.length;
-}
-
-// ---- Additional Selectors ----
-
-/**
- * Check if a tab is currently streaming results.
- */
-export function isTabStreaming(tabId: number): boolean {
-  const tab = getTabById(tabId);
-  return tab?.isStreaming ?? false;
 }
 
 /**

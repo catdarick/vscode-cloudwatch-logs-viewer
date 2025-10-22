@@ -26,7 +26,6 @@ type WebviewOutMessage =
   | { type: 'favorites'; data: FavoriteLogGroup[] }
   | { type: 'queryStatus'; data: { status: string } }
   | { type: 'queryResult'; data: any }
-  | { type: 'queryPartialResult'; data: any }
   | { type: 'queryError'; error: string }
   | { type: 'lastQuery'; query: string | undefined };
 

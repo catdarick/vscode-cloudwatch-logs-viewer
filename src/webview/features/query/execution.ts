@@ -1,6 +1,6 @@
 import { send } from '../../core/messaging';
 import { notifyInfo, notifyWarning, pulseLogGroupsAttention } from '../../components/status';
-import { getState, setRunningQueryTab, resetTabForNewQuery, setTabName } from '../../core/state';
+import { getState, resetTabForNewQuery, setTabName } from '../../core/state';
 import { renderTabs } from '../tabs/render';
 import { currentTimeRange } from '../timeRange/timeRange';
 import { getQueryText } from './editor';
@@ -65,7 +65,6 @@ export function runQuery() {
   resetTabForNewQuery(s, active.id, query, logGroups, region, { start: range.start, end: range.end });
   
   renderTabs();
-  setRunningQueryTab(active.id);
   
   const runButton = new RunButton();
   runButton.setRunning();

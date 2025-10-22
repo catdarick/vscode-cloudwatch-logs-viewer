@@ -209,10 +209,9 @@ DOM Updated
 3. resetTabForNewQuery() called (atomic state reset)
 4. send({ type: 'runQuery', ... }) to extension
 5. Extension executes query
-6. Partial results → on('queryPartialResult') → appendPartialResults()
-7. Final results → on('queryResult') → renderResults()
-8. completeTabQuery() marks query complete
-9. RunButton.setIdle() resets button
+6. Final results → on('queryResult') → renderResults()
+7. completeTabQuery() marks query complete
+8. RunButton.setIdle() resets button
 ```
 
 ## Performance Considerations
@@ -250,7 +249,6 @@ resizingColumn.style.maxWidth = newWidth + 'px';
 
 - **Event delegation** instead of per-element listeners
 - **Lazy rendering** for inactive tabs (state updated, DOM rendered on switch)
-- **Streaming append** for partial results (append rows without rebuilding table)
 
 ## Feature Module Pattern
 
@@ -355,7 +353,6 @@ TabState (per tab)
 ├── columnFilters: Record<string, Set<string>>
 ├── expandedRows: Set<number>
 ├── scrollPosition: number
-├── isStreaming: boolean
 └── status: string
 ```
 

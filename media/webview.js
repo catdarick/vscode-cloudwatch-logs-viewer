@@ -50,7 +50,6 @@
       columnFilters: {},
       expandedRows: /* @__PURE__ */ new Set(),
       scrollPosition: 0,
-      isStreaming: false,
       status: ""
     };
   }
@@ -58,7 +57,6 @@
     return {
       tabs: [],
       activeTabId: null,
-      runningQueryTabId: null,
       nextTabId: 1,
       favorites: [],
       savedQueries: [],
@@ -84,7 +82,6 @@
     tab.region = region;
     tab.timeRange = timeRange;
     tab.results = null;
-    tab.isStreaming = true;
     tab.searchQuery = "";
     tab.searchIndex = -1;
     tab.columnFilters = {};
@@ -97,7 +94,6 @@
     const tab = state2.tabs.find((t) => t.id === tabId);
     if (!tab) return false;
     tab.results = results;
-    tab.isStreaming = false;
     tab.status = `\u2713 Query Complete (${results.rows.length} rows)`;
     return true;
   }
@@ -105,16 +101,12 @@
     const tab = state2.tabs.find((t) => t.id === tabId);
     if (!tab) return false;
     tab.status = `Error: ${error}`;
-    tab.isStreaming = false;
     return true;
   }
-  function setTabStatus(state2, tabId, status, isStreaming) {
+  function setTabStatus(state2, tabId, status) {
     const tab = state2.tabs.find((t) => t.id === tabId);
     if (!tab) return false;
     tab.status = status;
-    if (isStreaming !== void 0) {
-      tab.isStreaming = isStreaming;
-    }
     return true;
   }
   function setTabName(state2, tabId, name, isCustomName = true) {
@@ -165,9 +157,6 @@
       state.activeTabId = state.tabs.length ? state.tabs[Math.max(0, idx - 1)].id : null;
     }
   }
-  function setRunningQueryTab(id) {
-    state.runningQueryTabId = id;
-  }
   function getState() {
     return state;
   }
@@ -208,7 +197,6 @@
       tabItem.className = "tab-item";
       tabItem.dataset.tabId = String(tab.id);
       if (tab.id === state2.activeTabId) tabItem.classList.add("active");
-      if (tab.isStreaming) tabItem.classList.add("streaming");
       const tabContent = document.createElement("div");
       tabContent.className = "tab-content";
       const tabName = document.createElement("div");
@@ -1402,7 +1390,7 @@
   }
   function renderResults(payload, skipClearFilters = false, forceTabId) {
     const s = getState();
-    const targetTabId = forceTabId ?? s.runningQueryTabId ?? s.activeTabId;
+    const targetTabId = forceTabId ?? s.activeTabId;
     if (targetTabId == null) return;
     if (!completeTabQuery(s, targetTabId, payload)) return;
     const container = getTabResultsContainer(targetTabId);
@@ -1429,67 +1417,6 @@
     notifyInfo(`Query complete (${payload.rows.length} rows)`);
     initFiltersForNewResults();
     scheduleSearchRerun();
-  }
-  function appendPartialResults(partial) {
-    const s = getState();
-    const targetTabId = s.runningQueryTabId ?? s.activeTabId;
-    if (targetTabId == null) return;
-    const tab = s.tabs.find((t) => t.id === targetTabId);
-    if (!tab) return;
-    if (!tab.results || !tab.results.rows) {
-      tab.results = { rows: [], fieldOrder: partial.fieldOrder || [], hiddenFields: partial.hiddenFields || ["@ptr"] };
-    }
-    const startIdx = tab.results.rows.length;
-    tab.results.rows.push(...partial.rows);
-    if (partial.fieldOrder && partial.fieldOrder.length) tab.results.fieldOrder = partial.fieldOrder;
-    if (partial.hiddenFields) tab.results.hiddenFields = partial.hiddenFields;
-    updateTab(s, targetTabId, { isStreaming: true });
-    const container = getTabResultsContainer(targetTabId);
-    if (!container) return;
-    const isActiveTab = targetTabId === s.activeTabId;
-    if (!isActiveTab) {
-      return;
-    }
-    let table = container.querySelector("table");
-    let tbody = table ? table.querySelector("tbody") : null;
-    const hidden = Array.isArray(tab.results.hiddenFields) ? tab.results.hiddenFields : ["@ptr"];
-    const fields = tab.results.fieldOrder.filter((f) => !hidden.includes(f));
-    if (!table) {
-      invalidateRowCache();
-      clearAllFilters();
-      const builder = new TableBuilder(tab.results, hidden);
-      table = builder.build();
-      container.innerHTML = "";
-      container.appendChild(table);
-      const eventBinder = new TableEventBinder(container);
-      eventBinder.bindAll();
-      tbody = table.querySelector("tbody");
-    } else {
-      partial.rows.forEach((row, idx) => {
-        const tr = document.createElement("tr");
-        tr.dataset.rowIndex = String(startIdx + idx);
-        const expandCell = document.createElement("td");
-        expandCell.className = "expand-cell";
-        const expandBtn = document.createElement("button");
-        expandBtn.type = "button";
-        expandBtn.className = "expand-btn";
-        expandBtn.textContent = "\u203A";
-        expandCell.appendChild(expandBtn);
-        tr.appendChild(expandCell);
-        fields.forEach((f) => {
-          const val = row.fields.find((x) => x.field === f)?.value || "";
-          const td = document.createElement("td");
-          td.textContent = val;
-          td.dataset.field = f;
-          tr.appendChild(td);
-        });
-        tbody?.appendChild(tr);
-      });
-    }
-    const statusMsg = `Streaming... (${tab.results.rows.length} rows)`;
-    updateTab(s, targetTabId, { status: statusMsg });
-    renderTabs();
-    notifyInfo(statusMsg, true, 1e3);
   }
 
   // src/webview/features/tabs/events.ts
@@ -2173,15 +2100,10 @@
 
   // src/webview/core/queryHandlers.ts
   function initQueryHandlers() {
-    on("queryPartialResult", (msg) => {
-      appendPartialResults(msg.data);
-      renderTabs();
-    });
     on("queryResult", (msg) => {
       renderResults(msg.data);
       initFiltersForNewResults();
       scheduleSearchRerun();
-      setRunningQueryTab(null);
       renderTabs();
       const runButton = new RunButton();
       runButton.setIdle();
@@ -2189,11 +2111,10 @@
     on("queryError", (msg) => {
       notifyError(msg.error);
       const s = getState();
-      const targetTabId = s.runningQueryTabId ?? s.activeTabId;
+      const targetTabId = s.activeTabId;
       if (targetTabId != null) {
         setTabError(s, targetTabId, msg.error);
       }
-      setRunningQueryTab(null);
       renderTabs();
       const runButton = new RunButton();
       runButton.setIdle();
@@ -2201,12 +2122,11 @@
     on("queryStatus", (msg) => {
       notifyInfo(msg.data.status);
       const s = getState();
-      const targetTabId = s.runningQueryTabId ?? s.activeTabId;
+      const targetTabId = s.activeTabId;
       if (targetTabId != null) {
         setTabStatus(s, targetTabId, msg.data.status);
       }
       if (/Complete|Cancel|Abort|Stop/i.test(msg.data.status)) {
-        setRunningQueryTab(null);
         renderTabs();
         const runButton = new RunButton();
         runButton.setIdle();
@@ -2572,7 +2492,6 @@
     }
     resetTabForNewQuery(s, active.id, query, logGroups, region, { start: range.start, end: range.end });
     renderTabs();
-    setRunningQueryTab(active.id);
     const runButton = new RunButton();
     runButton.setRunning();
     send({ type: "runQuery", data: { logGroups, region, query, startTime: range.start, endTime: range.end } });
