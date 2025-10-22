@@ -203,6 +203,14 @@
       tabName.className = "tab-name";
       tabName.textContent = tab.name;
       tabName.title = tab.name;
+      tabName.addEventListener("click", (e) => {
+        e.stopPropagation();
+      });
+      tabName.addEventListener("dblclick", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        startRenaming(tab.id, tabName);
+      });
       const tabInfo = document.createElement("div");
       tabInfo.className = "tab-info";
       if (tab.results?.rows) {
@@ -241,12 +249,82 @@
       });
       tabItem.appendChild(tabContent);
       tabItem.appendChild(closeBtn);
+      tabItem.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showContextMenu(e, tab.id);
+      });
       tabItem.addEventListener("click", () => {
         const evt = new CustomEvent("cwlv:switch-tab", { detail: { id: tab.id } });
         window.dispatchEvent(evt);
       });
       tabList.appendChild(tabItem);
     });
+  }
+  function startRenaming(tabId, tabNameElement) {
+    const currentName = tabNameElement.textContent || "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "tab-name-input";
+    input.value = currentName;
+    tabNameElement.style.display = "none";
+    if (tabNameElement.parentElement) {
+      tabNameElement.parentElement.insertBefore(input, tabNameElement);
+    }
+    input.focus();
+    input.select();
+    const finishRename = (save) => {
+      if (save && input.value.trim() && input.value !== currentName) {
+        const state2 = getState();
+        setTabName(state2, tabId, input.value.trim(), true);
+      }
+      tabNameElement.style.display = "";
+      input.remove();
+      if (save) {
+        renderTabs();
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finishRename(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finishRename(false);
+      }
+    });
+    input.addEventListener("blur", () => {
+      finishRename(true);
+    });
+  }
+  function showContextMenu(e, tabId) {
+    document.querySelectorAll(".tab-context-menu").forEach((el) => el.remove());
+    const menu = document.createElement("div");
+    menu.className = "tab-context-menu";
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    const renameItem = document.createElement("div");
+    renameItem.className = "tab-context-menu-item";
+    renameItem.textContent = "Rename Tab";
+    renameItem.addEventListener("click", () => {
+      menu.remove();
+      const tabItem = document.querySelector(`[data-tab-id="${tabId}"]`);
+      const tabNameElement = tabItem?.querySelector(".tab-name");
+      if (tabNameElement) {
+        startRenaming(tabId, tabNameElement);
+      }
+    });
+    menu.appendChild(renameItem);
+    document.body.appendChild(menu);
+    const closeMenu = (event) => {
+      if (!menu.contains(event.target)) {
+        menu.remove();
+        document.removeEventListener("click", closeMenu);
+      }
+    };
+    setTimeout(() => {
+      document.addEventListener("click", closeMenu);
+    }, 0);
   }
   function activateResultsContainer(tabId) {
     const containers = document.querySelectorAll(".results");

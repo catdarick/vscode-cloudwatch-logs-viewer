@@ -1619,10 +1619,31 @@ td.expand-cell { padding: 0.15rem 0.25rem; vertical-align: middle; }
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.2;
+  cursor: text;
+  user-select: none;
 }
 
 .tab-item.active .tab-name {
   font-weight: 600;
+}
+
+.tab-name-input {
+  font-size: 0.7rem;
+  font-weight: 500;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  line-height: 1.2;
+}
+
+.tab-name-input:focus {
+  border-color: var(--vscode-focusBorder);
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder);
 }
 
 .tab-info {
@@ -1718,6 +1739,18 @@ td.expand-cell { padding: 0.15rem 0.25rem; vertical-align: middle; }
   z-index: 10000;
   min-width: 120px;
   padding: 4px 0;
+}
+
+.tab-context-menu-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: background 0.1s ease;
+}
+
+.tab-context-menu-item:hover {
+  background: var(--vscode-menu-selectionBackground);
+  color: var(--vscode-menu-selectionForeground);
 }
 
 .context-menu-item {
