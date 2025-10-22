@@ -4,6 +4,7 @@ import { getState } from '../../core/state';
 import { updateTab } from '../../core/stateActions';
 import { renderResults } from '../results/render';
 import { searchResults, clearSearch } from '../search/search';
+import { syncSearchBarVisibility } from '../search/searchBar';
 
 export function initTabsEvents() {
   const newBtn = document.getElementById('newTabBtn');
@@ -56,6 +57,9 @@ export function initTabsEvents() {
     switchToTab(targetTabId);
     renderTabs();
     activateResultsContainer(targetTabId);
+    
+    // Sync search bar visibility for the new active tab
+    syncSearchBarVisibility();
     
     // Restore new tab's search state
     const tab = s.tabs.find(t => t.id === targetTabId);

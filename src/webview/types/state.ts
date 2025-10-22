@@ -32,6 +32,7 @@ export interface TabState {
   searchQuery: string;          // last search term in this tab
   searchIndex: number;          // current match index
   searchHideNonMatching: boolean; // hide rows that don't match search
+  searchBarOpen: boolean;       // whether the floating search bar is open for this tab
   rowCache?: DomRowCacheEntry[]; // DOM-based search cache (transient, not serializable)
   searchMatches?: SearchMatch[]; // Current search matches (transient, not serializable)
   previousMatchedRowIndices?: number[]; // Search optimization: previous matched row indices (transient)
@@ -71,6 +72,7 @@ export function createInitialTab(id: number): TabState {
     searchQuery: '',
     searchIndex: -1,
     searchHideNonMatching: false,
+    searchBarOpen: false,
     columnFilters: {},
     expandedRows: new Set<number>(),
     scrollPosition: 0,

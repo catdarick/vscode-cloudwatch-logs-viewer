@@ -46,6 +46,7 @@
       searchQuery: "",
       searchIndex: -1,
       searchHideNonMatching: false,
+      searchBarOpen: false,
       columnFilters: {},
       expandedRows: /* @__PURE__ */ new Set(),
       scrollPosition: 0,
@@ -332,6 +333,113 @@
     return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
 
+  // src/webview/features/search/searchBar.ts
+  function showSearchBar() {
+    const s = getState();
+    if (s.activeTabId == null) return;
+    const searchBar = document.getElementById("searchBar");
+    const searchInput = document.getElementById("searchInput");
+    if (!searchBar) return;
+    searchBar.removeAttribute("hidden");
+    updateTab(s, s.activeTabId, { searchBarOpen: true });
+    if (searchInput) {
+      searchInput.focus();
+      searchInput.select();
+    }
+  }
+  function hideSearchBar() {
+    const s = getState();
+    if (s.activeTabId == null) return;
+    const searchBar = document.getElementById("searchBar");
+    if (!searchBar) return;
+    searchBar.setAttribute("hidden", "");
+    updateTab(s, s.activeTabId, { searchBarOpen: false });
+    clearSearch();
+  }
+  function isSearchBarOpen() {
+    const s = getState();
+    if (s.activeTabId == null) return false;
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    return tab?.searchBarOpen ?? false;
+  }
+  function syncSearchBarVisibility() {
+    const s = getState();
+    if (s.activeTabId == null) return;
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab) return;
+    const searchBar = document.getElementById("searchBar");
+    if (!searchBar) return;
+    if (tab.searchBarOpen) {
+      searchBar.removeAttribute("hidden");
+    } else {
+      searchBar.setAttribute("hidden", "");
+    }
+  }
+  function updateMatchCounter(current, total) {
+    const counter = document.getElementById("searchMatchCounter");
+    if (!counter) return;
+    if (total === 0) {
+      counter.textContent = "No matches";
+    } else if (current >= 0) {
+      counter.textContent = `${current + 1}/${total}`;
+    } else {
+      counter.textContent = `${total} matches`;
+    }
+  }
+  function clearMatchCounter() {
+    const counter = document.getElementById("searchMatchCounter");
+    if (counter) {
+      counter.textContent = "";
+    }
+  }
+  function initSearchBarEvents() {
+    const closeBtn = document.getElementById("searchCloseBtn");
+    if (closeBtn && !closeBtn.hasAttribute("data-searchbar-bound")) {
+      closeBtn.setAttribute("data-searchbar-bound", "true");
+      closeBtn.addEventListener("click", () => {
+        hideSearchBar();
+      });
+    }
+    const searchInput = document.getElementById("searchInput");
+    if (searchInput && !searchInput.hasAttribute("data-searchbar-nav-bound")) {
+      searchInput.setAttribute("data-searchbar-nav-bound", "true");
+      searchInput.addEventListener("keydown", (e) => {
+        const keyEvent = e;
+        if (keyEvent.key === "Enter") {
+          e.preventDefault();
+          if (keyEvent.shiftKey) {
+            navigateSearchPrev();
+          } else {
+            navigateSearchNext();
+          }
+        } else if (keyEvent.key === "Escape") {
+          e.preventDefault();
+          hideSearchBar();
+        }
+      });
+    }
+  }
+  function initSearchKeyboardShortcuts() {
+    document.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        const target = e.target;
+        const isSearchInput = target.id === "searchInput";
+        const isInputField = target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+        if (!isInputField || isSearchInput) {
+          e.preventDefault();
+          showSearchBar();
+        }
+      }
+      if (e.key === "Escape" && isSearchBarOpen()) {
+        const target = e.target;
+        if (target.id === "searchInput") {
+          e.preventDefault();
+          hideSearchBar();
+        }
+      }
+    });
+  }
+
   // src/webview/features/search/search.ts
   var prevSearchTerm = "";
   var prevHideNonMatching = true;
@@ -413,6 +521,7 @@
   function clearSearch() {
     const input = document.getElementById("searchInput");
     if (input) input.value = "";
+    clearMatchCounter();
     searchResults();
   }
   function navigateSearchNext() {
@@ -467,6 +576,7 @@
     const match = tab.searchMatches[tab.searchIndex];
     match.mark.classList.add("current-match");
     match.mark.scrollIntoView({ behavior: "smooth", block: "center" });
+    updateMatchCounter(tab.searchIndex, tab.searchMatches.length);
     const statusText = `\u{1F50D} Match ${tab.searchIndex + 1}/${tab.searchMatches.length}`;
     updateTab(s, s.activeTabId, { status: statusText });
   }
@@ -520,6 +630,7 @@
         tab3.searchMatches = [];
         updateTab(s3, s3.activeTabId, { searchIndex: -1 });
       }
+      clearMatchCounter();
       return;
     }
     setSearchBusy(true);
@@ -603,6 +714,7 @@
             highlightCurrentMatch();
           } else {
             updateTab(s5, s5.activeTabId, { searchIndex: -1 });
+            updateMatchCounter(0, 0);
           }
           const statusText = `\u{1F50D} ${newSearchMatches.length} matches in ${matchedRowCount} rows`;
           updateTab(s5, s5.activeTabId, { status: statusText });
@@ -633,11 +745,6 @@
         const delay = computeSearchDelay();
         searchDebounceTimer = setTimeout(() => searchResults(), delay);
       });
-    }
-    const clearBtn = document.getElementById("searchClearBtn");
-    if (clearBtn && !clearBtn.hasAttribute("data-search-bound")) {
-      clearBtn.setAttribute("data-search-bound", "true");
-      clearBtn.addEventListener("click", clearSearch);
     }
     const prevBtn = document.getElementById("searchPrevBtn");
     if (prevBtn && !prevBtn.hasAttribute("data-search-bound")) {
@@ -1428,6 +1535,7 @@
       switchToTab2(targetTabId);
       renderTabs();
       activateResultsContainer(targetTabId);
+      syncSearchBarVisibility();
       const tab = s.tabs.find((t) => t.id === targetTabId);
       const searchInput = document.getElementById("searchInput");
       const hideCheckbox = document.getElementById("searchHideNonMatching");
@@ -2489,6 +2597,8 @@
     initQueryHandlers();
     initQueryButtons();
     initSearchEvents();
+    initSearchBarEvents();
+    initSearchKeyboardShortcuts();
     initTimeRangeUI();
     initSavedQueriesUI();
     initLogGroupsUI();

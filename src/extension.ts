@@ -436,21 +436,26 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
               <button id="newTabBtn" class="new-tab-btn" title="New tab (Ctrl+T)">+</button>
             </div>
           </div>
-          <div class="results-toolbar">
-            <div class="search-controls">
-              <label class="search-toggle">
-                <input type="checkbox" id="searchHideNonMatching" />
-                <span>Hide non-matching</span>
-              </label>
-              <input id="searchInput" placeholder="Search in results (Ctrl+F)..." />
-              <span id="searchSpinner" class="search-spinner" title="Searching" aria-hidden="true"></span>
-              <button id="searchPrevBtn" title="Previous match">▲</button>
-              <button id="searchNextBtn" title="Next match">▼</button>
-              <button id="searchClearBtn" title="Clear search">✕</button>
-            </div>
-          </div>
         </div>
         <div id="results-container" class="results-container"></div>
+        
+        <!-- Floating Search Bar -->
+        <div id="searchBar" class="search-bar" hidden>
+          <div class="search-bar-content">
+            <span class="search-icon" aria-hidden="true">🔍</span>
+            <input id="searchInput" type="text" placeholder="Find in results..." aria-label="Search in results" />
+            <span id="searchSpinner" class="search-spinner" title="Searching" aria-hidden="true"></span>
+            <span id="searchMatchCounter" class="search-match-counter"></span>
+            <button id="searchPrevBtn" class="search-nav-btn" title="Previous match (Shift+Enter)" aria-label="Previous match">▲</button>
+            <button id="searchNextBtn" class="search-nav-btn" title="Next match (Enter)" aria-label="Next match">▼</button>
+            <label class="search-toggle">
+              <input type="checkbox" id="searchHideNonMatching" />
+              <span>Hide non-matching</span>
+            </label>
+            <button id="searchCloseBtn" class="search-close-btn" title="Close (Esc)" aria-label="Close search">✕</button>
+          </div>
+        </div>
+        
         <div id="status" class="status status-hidden"></div>
       </section>
     </main>

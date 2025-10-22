@@ -6,6 +6,7 @@ import { renderTabs } from './features/tabs/render';
 import { initQueryHandlers } from './core/queryHandlers';
 import { clearAllFilters } from './features/results/filters';
 import { initSearchEvents } from './features/search/search';
+import { initSearchBarEvents, initSearchKeyboardShortcuts } from './features/search/searchBar';
 import { initQueryButtons } from './features/query/execution';
 import { initTimeRangeUI } from './features/timeRange/timeRange';
 import { initSavedQueriesUI } from './features/savedQueries/savedQueries';
@@ -20,6 +21,8 @@ function init() {
   initQueryHandlers();
   initQueryButtons();
   initSearchEvents();
+  initSearchBarEvents();
+  initSearchKeyboardShortcuts();
   initTimeRangeUI();
   initSavedQueriesUI();
   initLogGroupsUI();

@@ -23,6 +23,7 @@ export interface UpdateTabOptions {
   searchQuery?: string;
   searchIndex?: number;
   searchHideNonMatching?: boolean;
+  searchBarOpen?: boolean;
   scrollPosition?: number;
   timeRange?: TimeRange;
 }

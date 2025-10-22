@@ -2,6 +2,7 @@ import { getState, updateTab } from '../../core/state';
 import { send } from '../../core/messaging';
 import { escapeHtml } from '../../lib/html';
 import type { DomRowCacheEntry, SearchMatch } from '../../types/state';
+import { updateMatchCounter, clearMatchCounter } from './searchBar';
 
 // Module-level state for search execution control only
 let prevSearchTerm = '';
@@ -88,6 +89,7 @@ function computeSearchDelay(): number {
 export function clearSearch() {
   const input = document.getElementById('searchInput') as HTMLInputElement | null;
   if (input) input.value = '';
+  clearMatchCounter();
   searchResults();
 }
 
@@ -142,6 +144,9 @@ function highlightCurrentMatch() {
   const match = tab.searchMatches[tab.searchIndex];
   match.mark.classList.add('current-match');
   match.mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  
+  // Update match counter in floating bar
+  updateMatchCounter(tab.searchIndex, tab.searchMatches.length);
   
   const statusText = `🔍 Match ${tab.searchIndex + 1}/${tab.searchMatches.length}`;
   // Status removed - will be shown elsewhere
@@ -204,6 +209,7 @@ export function searchResults(preservePosition = false, force = false, restoreIn
       tab3.searchMatches = [];
       updateTab(s3, s3.activeTabId!, { searchIndex: -1 });
     }
+    clearMatchCounter();
     return;
   }
   setSearchBusy(true); // Searching... status removed - will show elsewhere
@@ -268,6 +274,7 @@ export function searchResults(preservePosition = false, force = false, restoreIn
           highlightCurrentMatch(); 
         } else {
           updateTab(s5, s5.activeTabId!, { searchIndex: -1 });
+          updateMatchCounter(0, 0); // Show "No matches"
         }
         
         const statusText = `🔍 ${newSearchMatches.length} matches in ${matchedRowCount} rows`;
@@ -302,11 +309,7 @@ export function initSearchEvents() {
       searchDebounceTimer = setTimeout(() => searchResults(), delay);
     });
   }
-  const clearBtn = document.getElementById('searchClearBtn');
-  if (clearBtn && !clearBtn.hasAttribute('data-search-bound')) {
-    clearBtn.setAttribute('data-search-bound', 'true');
-    clearBtn.addEventListener('click', clearSearch);
-  }
+  
   const prevBtn = document.getElementById('searchPrevBtn');
   if (prevBtn && !prevBtn.hasAttribute('data-search-bound')) {
     prevBtn.setAttribute('data-search-bound', 'true');
