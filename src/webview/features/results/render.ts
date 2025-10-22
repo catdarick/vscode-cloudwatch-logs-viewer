@@ -5,7 +5,7 @@
 import { QueryResults } from '../../types/domain';
 import { getState, completeTabQuery, updateTab } from '../../core/state';
 import { renderTabs } from '../tabs/render';
-import { setStatus } from '../../components/status';
+import { notifyInfo } from '../../components/status';
 import { scheduleSearchRerun, invalidateRowCache } from '../search/search';
 import { clearAllFilters, initFiltersForNewResults } from './filters';
 import { TableBuilder } from './builders/TableBuilder';
@@ -59,7 +59,7 @@ export function renderResults(payload: QueryResults, skipClearFilters = false, f
 
   // Update UI
   renderTabs();
-  setStatus(`✓ Query Complete (${payload.rows.length} rows)`);
+  notifyInfo(`Query complete (${payload.rows.length} rows)`);
   initFiltersForNewResults();
   scheduleSearchRerun();
 }
@@ -147,5 +147,5 @@ export function appendPartialResults(partial: QueryResults) {
   updateTab(s, targetTabId, { status: statusMsg });
   
   renderTabs();
-  setStatus(statusMsg);
+  notifyInfo(statusMsg, true, 1000);
 }

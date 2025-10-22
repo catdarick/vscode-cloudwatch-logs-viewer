@@ -1,6 +1,6 @@
 import { getState, getActiveTab, updateTab, setTabColumnFilters } from '../../core/state';
 import { renderTabs } from '../tabs/render';
-import { setStatus } from '../../components/status';
+import { notifyInfo } from '../../components/status';
 
 let activeFilters: Record<string, Set<string>> = {};
 let currentFilterModal: HTMLElement | null = null;
@@ -146,8 +146,8 @@ function applyColumnFilters() {
   renderTabs();
   const rowCountText = buildRowCountStatus();
   if (rowCountText) {
-    const statusText = `✓ Query Complete${rowCountText}`;
-    setStatus(statusText);
+    const statusText = `Query complete${rowCountText}`;
+    notifyInfo(statusText);
     if (activeTab && s.activeTabId) {
       updateTab(s, s.activeTabId, { status: statusText });
     }

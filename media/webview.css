@@ -968,6 +968,7 @@ button:hover {
   flex-direction: column;
   overflow: hidden;
   padding: 0.75rem 1rem;
+  position: relative;
 }
 
 /* Results Panel Header - Modern One-Row Design */
@@ -994,11 +995,6 @@ button:hover {
   background: var(--vscode-editorWidget-background);
   gap: 1rem;
   border-top: 1px solid var(--vscode-editorGroup-border);
-}
-
-.results-toolbar .status {
-  flex: 0 1 auto;
-  min-width: 0;
 }
 
 .search-controls {
@@ -1055,12 +1051,43 @@ button:hover {
 }
 
 .status {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
   font-size: 0.75rem;
-  padding: 0;
+  padding: 0.5rem 1rem;
   color: var(--vscode-descriptionForeground);
+  background-color: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-editorGroup-border);
+  border-bottom: none;
+  border-radius: 0 0 6px 6px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  opacity: 1;
+  z-index: 10;
+  transition: opacity 0.5s ease-out, transform 0.5s ease-out;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.status.status-hidden {
+  opacity: 0;
+  transform: translateY(100%);
+  pointer-events: none;
+}
+
+.status.status-warning {
+  background-color: var(--vscode-inputValidation-warningBackground);
+  border-color: var(--vscode-inputValidation-warningBorder);
+  color: var(--vscode-inputValidation-warningForeground);
+}
+
+.status.status-error {
+  background-color: var(--vscode-inputValidation-errorBackground);
+  border-color: var(--vscode-inputValidation-errorBorder);
+  color: var(--vscode-inputValidation-errorForeground);
 }
 
 .results-container {

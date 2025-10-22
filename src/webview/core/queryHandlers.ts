@@ -2,7 +2,7 @@ import { on } from './messaging';
 import { appendPartialResults, renderResults } from '../features/results/render';
 import { scheduleSearchRerun } from '../features/search/search';
 import { initFiltersForNewResults } from '../features/results/filters';
-import { setStatus } from '../components/status';
+import { notifyInfo, notifyError } from '../components/status';
 import { getState, setRunningQueryTab, setTabError, setTabStatus } from './state';
 import { renderFavorites, updateStarButtons } from '../features/favorites/favorites';
 import { renderSavedQueries } from '../features/savedQueries/savedQueries';
@@ -35,7 +35,7 @@ export function initQueryHandlers() {
   });
   
   on('queryError', (msg) => {
-    setStatus(`Error: ${msg.error}`);
+    notifyError(msg.error);
     const s = getState();
     // Update the tab that owns the running query using state action
     const targetTabId = s.runningQueryTabId ?? s.activeTabId;
@@ -54,7 +54,7 @@ export function initQueryHandlers() {
   });
   
   on('queryStatus', (msg) => {
-    setStatus(msg.data.status);
+    notifyInfo(msg.data.status);
     const s = getState();
     // Update the tab that owns the running query using state action
     const targetTabId = s.runningQueryTabId ?? s.activeTabId;
@@ -91,7 +91,7 @@ export function initQueryHandlers() {
   });
   
   on('logGroupsListError', (msg) => {
-    setStatus('❌ List error: ' + msg.error);
+    notifyError(msg.error);
   });
   
   // Toggle comment handler

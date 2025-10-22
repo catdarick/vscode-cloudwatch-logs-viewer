@@ -4,10 +4,8 @@
  */
 
 import { send } from '../../core/messaging';
-import { updateStarButtons, updateFavoritesCheckboxes, toggleFavorite, getCurrentFavorites } from '../favorites/favorites';
-import { setStatus } from '../../components/status';
-
-let currentLogGroups: string[] = [];
+import { updateFavoritesCheckboxes, toggleFavorite, getCurrentFavorites } from '../favorites/favorites';
+import { notifyInfo } from '../../components/status';
 
 /**
  * Load log groups from AWS
@@ -19,7 +17,7 @@ export function loadLogGroups() {
   const region = regionEl?.value.trim() || 'us-east-2';
   const prefix = filterEl?.value.trim() || '';
   
-  setStatus('Loading log groups...');
+  notifyInfo('Loading log groups...');
   send({ type: 'listLogGroups', region, prefix });
 }
 
@@ -27,7 +25,6 @@ export function loadLogGroups() {
  * Render log groups list
  */
 export function renderLogGroups(groups: string[]) {
-  currentLogGroups = groups;
   const container = document.getElementById('lgList');
   if (!container) return;
   
@@ -38,7 +35,6 @@ export function renderLogGroups(groups: string[]) {
   
   if (!groups.length) {
     container.innerHTML = '<div class="empty-state">No log groups found</div>';
-    setStatus('');
     updateSelectedCount();
     return;
   }
@@ -100,7 +96,6 @@ export function renderLogGroups(groups: string[]) {
     container.appendChild(wrapper);
   });
   
-  setStatus('');
   updateSelectedCount();
   updateFavoritesCheckboxes();
 }

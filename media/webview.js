@@ -267,9 +267,53 @@
   }
 
   // src/webview/components/status.ts
-  function setStatus(msg) {
+  var statusHideTimer = null;
+  function setStatus(msg, autohide = true, delay = 3e3, type = "info") {
     const el = document.getElementById("status");
-    if (el) el.textContent = msg;
+    if (!el) return;
+    if (statusHideTimer) {
+      clearTimeout(statusHideTimer);
+      statusHideTimer = null;
+    }
+    if (!msg) {
+      el.classList.add("status-hidden");
+      el.classList.remove("status-warning", "status-error");
+      setTimeout(() => {
+        if (el.classList.contains("status-hidden")) {
+          el.textContent = "";
+        }
+      }, 800);
+      return;
+    }
+    el.classList.remove("status-warning", "status-error");
+    if (type === "warning") {
+      el.classList.add("status-warning");
+    } else if (type === "error") {
+      el.classList.add("status-error");
+    }
+    el.textContent = msg;
+    el.classList.remove("status-hidden");
+    if (autohide) {
+      statusHideTimer = setTimeout(() => {
+        el.classList.add("status-hidden");
+        setTimeout(() => {
+          if (el.classList.contains("status-hidden")) {
+            el.textContent = "";
+            el.classList.remove("status-warning", "status-error");
+          }
+        }, 800);
+        statusHideTimer = null;
+      }, delay);
+    }
+  }
+  function notifyInfo(msg, autohide = true, delay = 3e3) {
+    setStatus(msg, autohide, delay, "info");
+  }
+  function notifyWarning(msg, autohide = true, delay = 5e3) {
+    setStatus(msg, autohide, delay, "warning");
+  }
+  function notifyError(msg, autohide = true, delay = 8e3) {
+    setStatus(msg, autohide, delay, "error");
   }
   function pulseLogGroupsAttention() {
     try {
@@ -424,7 +468,6 @@
     match.mark.classList.add("current-match");
     match.mark.scrollIntoView({ behavior: "smooth", block: "center" });
     const statusText = `\u{1F50D} Match ${tab.searchIndex + 1}/${tab.searchMatches.length}`;
-    setStatus(statusText);
     updateTab(s, s.activeTabId, { status: statusText });
   }
   function searchResults(preservePosition = false, force = false, restoreIndex) {
@@ -468,7 +511,6 @@
         });
         entry.lastMatched = true;
       });
-      setStatus("");
       setSearchBusy(false);
       prevSearchTerm = term;
       const s3 = getState();
@@ -481,7 +523,6 @@
       return;
     }
     setSearchBusy(true);
-    setStatus("\u{1F50D} Searching...");
     let scanIndices;
     const s4 = getState();
     const tab4 = s4.activeTabId != null ? s4.tabs.find((t) => t.id === s4.activeTabId) : null;
@@ -564,7 +605,6 @@
             updateTab(s5, s5.activeTabId, { searchIndex: -1 });
           }
           const statusText = `\u{1F50D} ${newSearchMatches.length} matches in ${matchedRowCount} rows`;
-          setStatus(statusText);
           updateTab(s5, s5.activeTabId, { status: statusText });
         }
         setSearchBusy(false);
@@ -815,8 +855,8 @@
     renderTabs();
     const rowCountText = buildRowCountStatus();
     if (rowCountText) {
-      const statusText = `\u2713 Query Complete${rowCountText}`;
-      setStatus(statusText);
+      const statusText = `Query complete${rowCountText}`;
+      notifyInfo(statusText);
       if (activeTab && s.activeTabId) {
         updateTab(s, s.activeTabId, { status: statusText });
       }
@@ -1279,7 +1319,7 @@
     const eventBinder = new TableEventBinder(container);
     eventBinder.bindAll();
     renderTabs();
-    setStatus(`\u2713 Query Complete (${payload.rows.length} rows)`);
+    notifyInfo(`Query complete (${payload.rows.length} rows)`);
     initFiltersForNewResults();
     scheduleSearchRerun();
   }
@@ -1342,7 +1382,7 @@
     const statusMsg = `Streaming... (${tab.results.rows.length} rows)`;
     updateTab(s, targetTabId, { status: statusMsg });
     renderTabs();
-    setStatus(statusMsg);
+    notifyInfo(statusMsg, true, 1e3);
   }
 
   // src/webview/features/tabs/events.ts
@@ -1421,24 +1461,21 @@
   }
 
   // src/webview/features/logGroups/logGroups.ts
-  var currentLogGroups = [];
   function loadLogGroups() {
     const regionEl = document.getElementById("region");
     const filterEl = document.getElementById("lgFilter");
     const region = regionEl?.value.trim() || "us-east-2";
     const prefix = filterEl?.value.trim() || "";
-    setStatus("Loading log groups...");
+    notifyInfo("Loading log groups...");
     send({ type: "listLogGroups", region, prefix });
   }
   function renderLogGroups(groups) {
-    currentLogGroups = groups;
     const container = document.getElementById("lgList");
     if (!container) return;
     const previouslySelected = getSelectedLogGroups();
     container.innerHTML = "";
     if (!groups.length) {
       container.innerHTML = '<div class="empty-state">No log groups found</div>';
-      setStatus("");
       updateSelectedCount();
       return;
     }
@@ -1488,7 +1525,6 @@
       wrapper.appendChild(starBtn);
       container.appendChild(wrapper);
     });
-    setStatus("");
     updateSelectedCount();
     updateFavoritesCheckboxes();
   }
@@ -1639,7 +1675,7 @@
       }
     });
   }
-  function updateStarButtons2() {
+  function updateStarButtons() {
     const regionEl = document.getElementById("region");
     const region = regionEl?.value.trim() || "us-east-2";
     const items = Array.from(document.querySelectorAll(".lg-item"));
@@ -2043,7 +2079,7 @@
       runButton.setIdle();
     });
     on("queryError", (msg) => {
-      setStatus(`Error: ${msg.error}`);
+      notifyError(msg.error);
       const s = getState();
       const targetTabId = s.runningQueryTabId ?? s.activeTabId;
       if (targetTabId != null) {
@@ -2055,7 +2091,7 @@
       runButton.setIdle();
     });
     on("queryStatus", (msg) => {
-      setStatus(msg.data.status);
+      notifyInfo(msg.data.status);
       const s = getState();
       const targetTabId = s.runningQueryTabId ?? s.activeTabId;
       if (targetTabId != null) {
@@ -2070,7 +2106,7 @@
     });
     on("favorites", (msg) => {
       renderFavorites(msg.data);
-      updateStarButtons2();
+      updateStarButtons();
     });
     on("savedQueries", (msg) => {
       renderSavedQueries(msg.data, msg.source, msg.error);
@@ -2079,7 +2115,7 @@
       renderLogGroups(msg.data);
     });
     on("logGroupsListError", (msg) => {
-      setStatus("\u274C List error: " + msg.error);
+      notifyError(msg.error);
     });
     on("toggleComment", () => {
       toggleCommentInQueryEditor();
@@ -2278,37 +2314,36 @@
     const ss = String(d.getUTCSeconds()).padStart(2, "0");
     return `${hh}:${mm}:${ss}`;
   }
-  function setParsedDate(which, dateObj, setStatusFn) {
+  function setParsedDate(which, dateObj) {
     const dateEl = document.getElementById(which + "Date");
     const timeEl = document.getElementById(which + "Time");
     if (!dateEl || !timeEl) return;
     dateEl.value = formatDateUTC(dateObj);
     timeEl.value = formatTimeUTC(dateObj);
-    if (setStatusFn) setStatusFn("\u2713 Parsed pasted date/time");
   }
-  function handleDatePaste(e, which, setStatusFn) {
+  function handleDatePaste(e, which) {
     const text = e.clipboardData?.getData("text") || "";
     if (!text.trim()) return;
     const parsed = parsePastedDate(text.trim());
     if (!parsed) {
       const fallback = new Date(text.trim());
       if (isNaN(fallback.getTime())) return;
-      setParsedDate(which, fallback, setStatusFn);
+      setParsedDate(which, fallback);
       e.preventDefault();
       return;
     }
-    setParsedDate(which, parsed, setStatusFn);
+    setParsedDate(which, parsed);
     e.preventDefault();
   }
-  function attachDatePasteHandlers(setStatusFn) {
+  function attachDatePasteHandlers() {
     ["start", "end"].forEach((which) => {
       const dateEl = document.getElementById(which + "Date");
       const timeEl = document.getElementById(which + "Time");
-      if (dateEl) dateEl.addEventListener("paste", (e) => handleDatePaste(e, which, setStatusFn));
-      if (timeEl) timeEl.addEventListener("paste", (e) => handleDatePaste(e, which, setStatusFn));
+      if (dateEl) dateEl.addEventListener("paste", (e) => handleDatePaste(e, which));
+      if (timeEl) timeEl.addEventListener("paste", (e) => handleDatePaste(e, which));
     });
   }
-  function initTimeRangeUI(setStatusFn) {
+  function initTimeRangeUI() {
     Array.from(document.querySelectorAll(".mode-btn")).forEach((btn) => {
       btn.addEventListener("click", () => {
         Array.from(document.querySelectorAll(".mode-btn")).forEach((b) => b.classList.remove("active"));
@@ -2365,7 +2400,7 @@
     if (copyBtn) {
       copyBtn.addEventListener("click", copyStartToEnd);
     }
-    attachDatePasteHandlers(setStatusFn);
+    attachDatePasteHandlers();
     updateDateTimeMax();
     toggleTimeMode();
   }
@@ -2385,7 +2420,7 @@
   }
   function abortQuery() {
     send({ type: "abortQuery" });
-    setStatus("\u23F8 Cancelling query...");
+    notifyInfo("Cancelling query...", true, 2e3);
     const runButton = new RunButton();
     runButton.setAborting();
   }
@@ -2394,7 +2429,7 @@
     try {
       range = currentTimeRange();
     } catch (e) {
-      setStatus(`\u26A0 ${e.message || "Invalid time range"}`);
+      notifyWarning(e.message || "Invalid time range");
       const absPanel = document.querySelector(".absolute-time");
       if (absPanel) {
         absPanel.classList.remove("cwlv-pulse-attention");
@@ -2409,19 +2444,19 @@
     const region = regionInput.getValue();
     const query = getQueryText();
     if (!logGroups.length) {
-      setStatus("\u26A0 Select at least one log group");
+      notifyWarning("Select at least one log group");
       pulseLogGroupsAttention();
       return;
     }
     if (!query.trim()) {
-      setStatus("\u26A0 Query string is empty");
+      notifyWarning("Query string is empty");
       return;
     }
     const s = getState();
     const active = s.activeTabId != null ? s.tabs.find((t) => t.id === s.activeTabId) : void 0;
     const nowName = `Query ${formatTimestamp(Date.now())}`;
     if (!active) {
-      setStatus("\u26A0 No active tab");
+      notifyWarning("No active tab");
       return;
     }
     if (!active.isCustomName) {
@@ -2430,7 +2465,6 @@
     resetTabForNewQuery(s, active.id, query, logGroups, region, { start: range.start, end: range.end });
     renderTabs();
     setRunningQueryTab(active.id);
-    setStatus("Running query...");
     const runButton = new RunButton();
     runButton.setRunning();
     send({ type: "runQuery", data: { logGroups, region, query, startTime: range.start, endTime: range.end } });
@@ -2455,7 +2489,7 @@
     initQueryHandlers();
     initQueryButtons();
     initSearchEvents();
-    initTimeRangeUI(setStatus);
+    initTimeRangeUI();
     initSavedQueriesUI();
     initLogGroupsUI();
     initQueryEditorUI();
@@ -2472,7 +2506,6 @@
       }
     }
     renderTabs();
-    setStatus("Ready");
     try {
       send({ type: "getSavedQueries" });
       send({ type: "getFavorites" });

@@ -1,5 +1,5 @@
 import { send } from '../../core/messaging';
-import { setStatus, pulseLogGroupsAttention } from '../../components/status';
+import { notifyInfo, notifyWarning, pulseLogGroupsAttention } from '../../components/status';
 import { getState, setRunningQueryTab, resetTabForNewQuery, setTabName } from '../../core/state';
 import { renderTabs } from '../tabs/render';
 import { currentTimeRange } from '../timeRange/timeRange';
@@ -22,7 +22,7 @@ function formatTimestamp(ts: number): string {
 
 export function abortQuery() {
   send({ type: 'abortQuery' });
-  setStatus('⏸ Cancelling query...');
+  notifyInfo('Cancelling query...', true, 2000);
   
   const runButton = new RunButton();
   runButton.setAborting();
@@ -31,7 +31,7 @@ export function abortQuery() {
 export function runQuery() {
   let range: { start: number; end: number };
   try { range = currentTimeRange(); } catch (e: any) {
-    setStatus(`⚠ ${e.message || 'Invalid time range'}`);
+    notifyWarning(e.message || 'Invalid time range');
     const absPanel = document.querySelector('.absolute-time');
     if (absPanel) {
       absPanel.classList.remove('cwlv-pulse-attention');
@@ -46,15 +46,15 @@ export function runQuery() {
   const region = regionInput.getValue();
   const query = getQueryText();
   
-  if (!logGroups.length) { setStatus('⚠ Select at least one log group'); pulseLogGroupsAttention(); return; }
-  if (!query.trim()) { setStatus('⚠ Query string is empty'); return; }
+  if (!logGroups.length) { notifyWarning('Select at least one log group'); pulseLogGroupsAttention(); return; }
+  if (!query.trim()) { notifyWarning('Query string is empty'); return; }
 
   const s = getState();
   const active = s.activeTabId != null ? s.tabs.find(t => t.id === s.activeTabId) : undefined;
   const nowName = `Query ${formatTimestamp(Date.now())}`;
   if (!active) {
     // Should have been created already by tabs init; fallback: do nothing
-    setStatus('⚠ No active tab');
+    notifyWarning('No active tab');
     return;
   }
   
@@ -66,7 +66,6 @@ export function runQuery() {
   
   renderTabs();
   setRunningQueryTab(active.id);
-  setStatus('Running query...');
   
   const runButton = new RunButton();
   runButton.setRunning();

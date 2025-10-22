@@ -12,7 +12,6 @@ import { initSavedQueriesUI } from './features/savedQueries/savedQueries';
 import { initLogGroupsUI } from './features/logGroups/logGroups';
 import { initQueryEditorUI } from './features/query/editor';
 import { getState } from './core/state';
-import { setStatus } from './components/status';
 
 function init() {
   initMessageListener();
@@ -21,7 +20,7 @@ function init() {
   initQueryHandlers();
   initQueryButtons();
   initSearchEvents();
-  initTimeRangeUI(setStatus); // Pass setStatus for paste feedback
+  initTimeRangeUI();
   initSavedQueriesUI();
   initLogGroupsUI();
   initQueryEditorUI();
@@ -39,7 +38,6 @@ function init() {
     }
   }
   renderTabs();
-  setStatus('Ready');
   // Request initial data from extension
   try {
     send({ type: 'getSavedQueries' });

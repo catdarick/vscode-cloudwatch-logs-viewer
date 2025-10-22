@@ -437,7 +437,6 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
             </div>
           </div>
           <div class="results-toolbar">
-            <div id="status" class="status"></div>
             <div class="search-controls">
               <label class="search-toggle">
                 <input type="checkbox" id="searchHideNonMatching" />
@@ -452,6 +451,7 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
           </div>
         </div>
         <div id="results-container" class="results-container"></div>
+        <div id="status" class="status status-hidden"></div>
       </section>
     </main>
   </div>

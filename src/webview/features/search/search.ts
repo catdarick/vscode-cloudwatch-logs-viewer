@@ -1,5 +1,4 @@
 import { getState, updateTab } from '../../core/state';
-import { setStatus } from '../../components/status';
 import { send } from '../../core/messaging';
 import { escapeHtml } from '../../lib/html';
 import type { DomRowCacheEntry, SearchMatch } from '../../types/state';
@@ -145,7 +144,7 @@ function highlightCurrentMatch() {
   match.mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
   
   const statusText = `🔍 Match ${tab.searchIndex + 1}/${tab.searchMatches.length}`;
-  setStatus(statusText);
+  // Status removed - will be shown elsewhere
   
   updateTab(s, s.activeTabId!, { status: statusText });
 }
@@ -197,7 +196,7 @@ export function searchResults(preservePosition = false, force = false, restoreIn
       entry.cells.forEach(c => { if (c.el.textContent !== c.original) c.el.textContent = c.original; });
       entry.lastMatched = true;
     });
-    setStatus(''); setSearchBusy(false); prevSearchTerm = term; 
+    setSearchBusy(false); prevSearchTerm = term; 
     const s3 = getState();
     const tab3 = s3.activeTabId != null ? s3.tabs.find(t => t.id === s3.activeTabId) : null;
     if (tab3) {
@@ -207,7 +206,7 @@ export function searchResults(preservePosition = false, force = false, restoreIn
     }
     return;
   }
-  setSearchBusy(true); setStatus('🔍 Searching...');
+  setSearchBusy(true); // Searching... status removed - will show elsewhere
   let scanIndices: number[];
   const s4 = getState();
   const tab4 = s4.activeTabId != null ? s4.tabs.find(t => t.id === s4.activeTabId) : null;
@@ -272,7 +271,7 @@ export function searchResults(preservePosition = false, force = false, restoreIn
         }
         
         const statusText = `🔍 ${newSearchMatches.length} matches in ${matchedRowCount} rows`;
-        setStatus(statusText);
+        // Status removed - will be shown elsewhere
         updateTab(s5, s5.activeTabId!, { status: statusText });
       }
       

@@ -254,19 +254,18 @@ function formatTimeUTC(d: Date): string {
 /**
  * Set parsed date into date/time inputs
  */
-function setParsedDate(which: 'start' | 'end', dateObj: Date, setStatusFn?: (msg: string) => void) {
+function setParsedDate(which: 'start' | 'end', dateObj: Date) {
   const dateEl = document.getElementById(which + 'Date') as HTMLInputElement;
   const timeEl = document.getElementById(which + 'Time') as HTMLInputElement;
   if (!dateEl || !timeEl) return;
   dateEl.value = formatDateUTC(dateObj);
   timeEl.value = formatTimeUTC(dateObj);
-  if (setStatusFn) setStatusFn('✓ Parsed pasted date/time');
 }
 
 /**
  * Handle paste events on date/time inputs
  */
-function handleDatePaste(e: ClipboardEvent, which: 'start' | 'end', setStatusFn?: (msg: string) => void) {
+function handleDatePaste(e: ClipboardEvent, which: 'start' | 'end') {
   const text = e.clipboardData?.getData('text') || '';
   if (!text.trim()) return; // let default behavior
   const parsed = parsePastedDate(text.trim());
@@ -274,30 +273,30 @@ function handleDatePaste(e: ClipboardEvent, which: 'start' | 'end', setStatusFn?
     // Try tolerant fallback: Date.parse
     const fallback = new Date(text.trim());
     if (isNaN(fallback.getTime())) return; // allow native paste
-    setParsedDate(which, fallback, setStatusFn);
+    setParsedDate(which, fallback);
     e.preventDefault();
     return;
   }
-  setParsedDate(which, parsed, setStatusFn);
+  setParsedDate(which, parsed);
   e.preventDefault(); // prevent raw text from entering field
 }
 
 /**
  * Attach paste handlers to date/time inputs
  */
-function attachDatePasteHandlers(setStatusFn?: (msg: string) => void) {
+function attachDatePasteHandlers() {
   (['start', 'end'] as const).forEach(which => {
     const dateEl = document.getElementById(which + 'Date');
     const timeEl = document.getElementById(which + 'Time');
-    if (dateEl) dateEl.addEventListener('paste', (e) => handleDatePaste(e as ClipboardEvent, which, setStatusFn));
-    if (timeEl) timeEl.addEventListener('paste', (e) => handleDatePaste(e as ClipboardEvent, which, setStatusFn));
+    if (dateEl) dateEl.addEventListener('paste', (e) => handleDatePaste(e as ClipboardEvent, which));
+    if (timeEl) timeEl.addEventListener('paste', (e) => handleDatePaste(e as ClipboardEvent, which));
   });
 }
 
 /**
  * Initialize time range UI event listeners
  */
-export function initTimeRangeUI(setStatusFn?: (msg: string) => void) {
+export function initTimeRangeUI() {
   // Mode toggle buttons (relative vs absolute)
   Array.from<Element>(document.querySelectorAll('.mode-btn')).forEach(btn => {
     btn.addEventListener('click', () => {
@@ -374,7 +373,7 @@ export function initTimeRangeUI(setStatusFn?: (msg: string) => void) {
   }
 
   // Attach paste handlers for smart date parsing
-  attachDatePasteHandlers(setStatusFn);
+  attachDatePasteHandlers();
 
   // Set max date/time constraints and update periodically
   updateDateTimeMax();
