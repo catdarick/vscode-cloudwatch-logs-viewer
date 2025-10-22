@@ -2,7 +2,7 @@
   "name": "cloudwatch-logs-viewer",
   "displayName": "CloudWatch Logs Viewer",
   "description": "View and query AWS CloudWatch Logs Insights directly inside VS Code with time range selector, favorites and saved queries.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "catdarick",
   "author": "catdarick",
   "repository": {
