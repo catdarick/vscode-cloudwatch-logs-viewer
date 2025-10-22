@@ -195,7 +195,7 @@ function removeFavorite(context: vscode.ExtensionContext, name: string, region: 
   context.globalState.update(FAVORITES_KEY, getFavorites(context).filter(x => !(x.name === name && x.region === region)));
 }
 
-async function handleRunQuery(data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number }, context: vscode.ExtensionContext) {
+async function handleRunQuery(data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number }, _context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration();
   const region = data.region || config.get('cloudwatchLogsViewer.defaultRegion') as string;
   const timeoutMs = config.get('cloudwatchLogsViewer.queryTimeoutMs') as number;
@@ -260,7 +260,6 @@ async function handleRunQuery(data: { logGroups: string[]; region?: string; quer
 // If no fields clause, prepend 'fields @message' line.
 function ensureMessageField(original: string): { query: string; modified: boolean } {
   if (!original) return { query: original, modified: false };
-  const lower = original.toLowerCase();
   if (/@message\b/i.test(original)) {
     return { query: original, modified: false };
   }
@@ -441,7 +440,7 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
             <div id="status" class="status"></div>
             <div class="search-controls">
               <label class="search-toggle">
-                <input type="checkbox" id="searchHideNonMatching" checked />
+                <input type="checkbox" id="searchHideNonMatching" />
                 <span>Hide non-matching</span>
               </label>
               <input id="searchInput" placeholder="Search in results (Ctrl+F)..." />

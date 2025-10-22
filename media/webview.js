@@ -1,2438 +1,493 @@
-/* global acquireVsCodeApi */
-const vscode = acquireVsCodeApi();
-
-// Global error reporting to surface issues that might disable button handlers
-window.addEventListener('error', (e) => {
+"use strict";
+(() => {
+  // src/webview/core/messaging.ts
+  var vscode = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
+  var handlers = {};
+  function send(message) {
     try {
-        const statusEl = document.getElementById('status');
-        if (statusEl) statusEl.textContent = '⚠ Script error: ' + (e.message || e.error?.message || 'Unknown');
-    } catch (_) { /* ignore */ }
-});
-window.addEventListener('unhandledrejection', (e) => {
-    try {
-        const statusEl = document.getElementById('status');
-        if (statusEl) statusEl.textContent = '⚠ Promise rejection: ' + (e.reason?.message || e.reason || 'Unknown');
-    } catch (_) { }
-});
-
-function debugLog(message) {
-    try {
-        // Allow disabling via localStorage flag
-        if (typeof localStorage !== 'undefined' && localStorage.getItem('cwlv.debug') === 'off') return;
-        vscode.postMessage({ type: 'debugLog', message });
-    } catch (_) { /* ignore */ }
-}
-
-// State
-let currentLogGroups = [];
-let currentFavorites = [];
-let currentResults = [];
-let savedQueries = [];
-let savedQueriesSource = 'aws';
-const commentToken = '#'; // fixed CloudWatch Logs comment token
-
-// Relative time state
-let relativeValue = 1;
-let relativeUnit = 'hours'; // 'minutes', 'hours', 'days'
-
-// Tab management state
-let tabs = [];
-let activeTabId = null;
-let nextTabId = 1;
-let runningQueryTabId = null; // Track which tab is running a query
-
-// Tab structure:
-// {
-//   id: number,
-//   name: string,
-//   timestamp: number,
-//   query: string,
-//   logGroups: string[],
-//   region: string,
-//   timeRange: { start: number, end: number },
-//   results: object,
-//   searchQuery: string,
-//   searchIndex: number,
-//   columnFilters: object,
-//   expandedRows: Set,
-//   scrollPosition: number,
-//   status: string
-// }
-
-// Event listeners
-document.getElementById('runBtn').addEventListener('click', () => {
-    const btn = document.getElementById('runBtn');
-    const state = btn?.getAttribute('data-state');
-    if (state === 'running') {
-        // Cancel/abort running query
-        vscode.postMessage({ type: 'abortQuery' });
-        if (btn) {
-            btn.setAttribute('data-state', 'aborting');
-            btn.disabled = true;
-            const label = btn.querySelector('.run-btn-label');
-            if (label) label.textContent = 'Cancelling Query...';
-        }
-        setStatus('⏸ Cancelling query...');
-    } else {
-        // Start new query
-        runQuery();
+      vscode?.postMessage(message);
+    } catch (e) {
+      console.warn("[messaging] postMessage failed", e);
     }
-});
-document.getElementById('lgRefreshBtn').addEventListener('click', loadLogGroups);
-document.getElementById('lgFilter').addEventListener('input', filterLogGroups);
-document.getElementById('savedSelect').addEventListener('change', loadSavedQuery);
-// Debounced search input to avoid reprocessing entire table on every keystroke
-const searchInputEl = document.getElementById('searchInput');
-let searchDebounceTimer = null;
-let lastKeyTime = 0;
-function computeSearchDelay() {
-    const term = searchInputEl.value.trim();
-    const len = term.length;
-    const base = 60; // fastest path
-    const rowFactor = Math.min(300, (rowCache ? rowCache.length / 50 : 0)); // scale with rows up to +300ms
-    // If user is typing quickly (<150ms between keys) increase debounce slightly to batch
-    const now = Date.now();
-    const typingFast = (now - lastKeyTime) < 150;
-    lastKeyTime = now;
-    if (len === 0) return 0; // clear immediate
-    if (len < 3) return 200 + rowFactor; // short terms produce many false positives
-    if (typingFast) return 140 + rowFactor / 2;
-    // Longer stable term -> faster feedback
-    return base + rowFactor / 3;
-}
-searchInputEl.addEventListener('input', () => {
-    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-    const delay = computeSearchDelay();
-    searchDebounceTimer = setTimeout(() => searchResults(), delay);
-});
-document.getElementById('searchClearBtn').addEventListener('click', clearSearch);
-document.getElementById('searchPrevBtn').addEventListener('click', navigateSearchPrev);
-document.getElementById('searchNextBtn').addEventListener('click', navigateSearchNext);
-document.getElementById('searchHideNonMatching').addEventListener('change', toggleHideNonMatching);
-
-// Absolute time helper buttons
-document.getElementById('startNowBtn').addEventListener('click', () => setDateTimeToNow('start'));
-document.getElementById('endNowBtn').addEventListener('click', () => setDateTimeToNow('end'));
-document.getElementById('copyStartToEnd').addEventListener('click', copyStartToEnd);
-
-// Time mode toggle - segmented control
-document.querySelectorAll('.mode-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        toggleTimeMode();
+  }
+  function on(type, handler) {
+    if (!handlers[type]) handlers[type] = [];
+    handlers[type].push(handler);
+  }
+  function initMessageListener() {
+    window.addEventListener("message", (event) => {
+      const msg = event.data;
+      if (!msg || typeof msg !== "object" || !msg.type) return;
+      const list = handlers[msg.type];
+      if (list) {
+        list.forEach((h) => {
+          try {
+            h(msg);
+          } catch (e) {
+            console.error("handler error", e);
+          }
+        });
+      }
     });
-});
+  }
 
-// Relative time controls
-const relativeValueInput = document.getElementById('relativeValue');
-
-// Quick value buttons
-document.querySelectorAll('.relative-quick-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        // Update active state
-        document.querySelectorAll('.relative-quick-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        
-        // Update value
-        relativeValue = parseInt(btn.dataset.value, 10);
-        relativeValueInput.value = ''; // Clear custom input
-        relativeValueInput.classList.remove('active'); // Remove highlight from custom input
-    });
-});
-
-// Custom input field
-relativeValueInput.addEventListener('input', (e) => {
-    const val = parseInt(e.target.value, 10);
-    if (val && val >= 1) {
-        relativeValue = val;
-        // Deactivate quick buttons when using custom value
-        document.querySelectorAll('.relative-quick-btn').forEach(b => b.classList.remove('active'));
-        // Highlight the custom input
-        relativeValueInput.classList.add('active');
-    } else {
-        // Remove highlight if field is empty
-        relativeValueInput.classList.remove('active');
-    }
-});
-
-// Auto-select content when clicking on the custom field
-relativeValueInput.addEventListener('click', (e) => {
-    e.target.select();
-});
-
-// Also select on focus for keyboard navigation
-relativeValueInput.addEventListener('focus', (e) => {
-    e.target.select();
-});
-
-document.querySelectorAll('.unit-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        document.querySelectorAll('.unit-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        relativeUnit = btn.dataset.unit;
-    });
-});
-
-// Set max date/time to prevent future dates
-function updateDateTimeMax() {
-    const now = new Date();
-    const maxDate = now.toISOString().slice(0, 10); // YYYY-MM-DD
-    const maxTime = now.toISOString().slice(11, 19); // HH:mm:ss
-
-    document.getElementById('startDate').max = maxDate;
-    document.getElementById('endDate').max = maxDate;
-    document.getElementById('startTime').max = maxTime;
-    document.getElementById('endTime').max = maxTime;
-}
-
-// Initialize and update max constraints
-updateDateTimeMax();
-// Update every minute to keep max time current
-setInterval(updateDateTimeMax, 60000);
-
-// Query editor with syntax highlighting overlay
-const queryEditor = document.getElementById('query');
-const queryHighlight = document.getElementById('queryHighlight');
-
-// Update syntax highlighting on input
-queryEditor.addEventListener('input', (e) => {
-    updateSyntaxHighlighting();
-    schedulePersistLastQuery();
-});
-queryEditor.addEventListener('scroll', syncScroll);
-
-function syncScroll() {
-    queryHighlight.scrollTop = queryEditor.scrollTop;
-    queryHighlight.scrollLeft = queryEditor.scrollLeft;
-}
-
-function updateSyntaxHighlighting() {
-    const text = queryEditor.value;
-    queryHighlight.innerHTML = highlightQuery(text);
-    syncScroll();
-}
-
-// Log groups collapsible section
-document.getElementById('otherGroupsBtn').addEventListener('click', toggleOtherGroupsSection);
-
-// Tab management
-document.getElementById('newTabBtn').addEventListener('click', createNewTab);
-
-// Favorites collapsible section - removed, favorites are always visible now
-
-// Keyboard shortcuts
-document.getElementById('searchInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') clearSearch();
-});
-
-document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-        e.preventDefault();
-        document.getElementById('searchInput').focus();
-    }
-    
-    // Tab navigation shortcuts
-    if ((e.ctrlKey || e.metaKey) && e.key === 't' && !e.shiftKey) {
-        e.preventDefault();
-        createNewTab();
-    }
-    
-    if ((e.ctrlKey || e.metaKey) && e.key === 'w' && !e.shiftKey) {
-        e.preventDefault();
-        if (activeTabId) {
-            closeTab(activeTabId);
-        }
-    }
-    
-    // Ctrl/Cmd+Tab for next tab, Ctrl/Cmd+Shift+Tab for previous tab
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
-        e.preventDefault();
-        if (tabs.length > 1) {
-            const currentIndex = tabs.findIndex(t => t.id === activeTabId);
-            if (currentIndex !== -1) {
-                const nextIndex = e.shiftKey 
-                    ? (currentIndex - 1 + tabs.length) % tabs.length
-                    : (currentIndex + 1) % tabs.length;
-                switchToTab(tabs[nextIndex].id);
-            }
-        }
-    }
-});
-// Messages from extension
-window.addEventListener('message', (event) => {
-    const msg = event.data || {};
-    if (msg.type === 'toggleComment') {
-        toggleCommentInQueryEditor();
-    } else if (msg.type === 'lastQuery') {
-        if (typeof msg.query === 'string' && msg.query.trim()) {
-            setQueryText(msg.query);
-        }
-    }
-});
-function toggleCommentInQueryEditor() {
-    const editor = queryEditor;
-    if (!editor) return;
-    const text = editor.value;
-    let selStart = editor.selectionStart;
-    let selEnd = editor.selectionEnd;
-    if (selStart === selEnd) {
-        selStart = text.lastIndexOf('\n', selStart - 1) + 1;
-        const next = text.indexOf('\n', selEnd);
-        selEnd = next === -1 ? text.length : next;
-    } else {
-        selStart = text.lastIndexOf('\n', selStart - 1) + 1;
-        const after = text.indexOf('\n', selEnd);
-        selEnd = after === -1 ? text.length : after;
-    }
-    const block = text.slice(selStart, selEnd);
-    const lines = block.split('\n');
-    const nonEmpty = lines.filter(l => l.trim() !== '');
-    // A line is considered commented if, after leading indentation, it begins with the token.
-    const isCommented = (l) => {
-        const indentMatch = /^[\t ]*/.exec(l) || [''];
-        const afterIndent = l.slice(indentMatch[0].length);
-        return afterIndent.startsWith(commentToken);
+  // src/webview/types/state.ts
+  function createInitialTab(id) {
+    return {
+      id,
+      name: "Results",
+      isCustomName: false,
+      timestamp: Date.now(),
+      query: "",
+      logGroups: [],
+      region: "",
+      timeRange: { start: 0, end: 0 },
+      results: null,
+      searchQuery: "",
+      searchIndex: -1,
+      searchHideNonMatching: false,
+      columnFilters: {},
+      expandedRows: /* @__PURE__ */ new Set(),
+      scrollPosition: 0,
+      isStreaming: false,
+      status: ""
     };
-    const allCommented = nonEmpty.length > 0 && nonEmpty.every(isCommented);
-    const out = lines.map(line => {
-        if (line.trim() === '') return line;
-        const indentMatch = /^[\t ]*/.exec(line) || [''];
-        const indent = indentMatch[0];
-        const afterIndent = line.slice(indent.length);
-        if (allCommented) {
-            if (afterIndent.startsWith(commentToken)) {
-                // Remove token and a single following space if present, but preserve additional spacing beyond one
-                let remainder = afterIndent.slice(commentToken.length);
-                if (remainder.startsWith(' ')) remainder = remainder.slice(1); // only remove one space
-                return indent + remainder;
-            }
-            return line;
-        } else {
-            // Comment path: don't double comment
-            if (afterIndent.startsWith(commentToken)) return line;
-            const spacer = commentToken.endsWith(' ') ? '' : ' ';
-            return indent + commentToken + spacer + afterIndent;
-        }
-    }).join('\n');
-    editor.value = text.slice(0, selStart) + out + text.slice(selEnd);
-    editor.selectionStart = selStart;
-    editor.selectionEnd = selStart + out.length;
-    updateSyntaxHighlighting();
-}
-function escapeForRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-// Functions
-function setDateTimeToNow(which) {
-    const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
-    const timeStr = now.toISOString().slice(11, 19); // HH:mm:ss
-
-    if (which === 'start') {
-        document.getElementById('startDate').value = dateStr;
-        document.getElementById('startTime').value = timeStr;
-    } else {
-        document.getElementById('endDate').value = dateStr;
-        document.getElementById('endTime').value = timeStr;
-    }
-}
-
-// --- Paste-to-parse absolute time helpers ---
-// Allow user to paste a date/time string (various common formats) into either
-// the date or time input and we attempt to parse and populate both fields.
-// Supported examples:
-//   2025-10-21T14:33:05Z
-//   2025-10-21T14:33:05.123Z
-//   2025-10-21 14:33:05
-//   2025-10-21 14:33 (assumes seconds 00)
-//   2025/10/21 14:33:05
-//   10/21/2025 2:33 PM   (US)
-//   21/10/2025 14:33:05  (day-first if first component > 12)
-//   10/21/2025           (defaults time 00:00:00)
-//   1697896205           (epoch seconds)
-//   1697896205000        (epoch milliseconds)
-//   2025-10-21T10:33:05-04:00 (offset)
-// If timezone/offset omitted we assume UTC.
-
-function attachDatePasteHandlers() {
-    ['start', 'end'].forEach(which => {
-        const dateEl = document.getElementById(which + 'Date');
-        const timeEl = document.getElementById(which + 'Time');
-        if (dateEl) dateEl.addEventListener('paste', (e) => handleDatePaste(e, which));
-        if (timeEl) timeEl.addEventListener('paste', (e) => handleDatePaste(e, which));
-    });
-}
-
-function handleDatePaste(e, which) {
-    const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
-    if (!text.trim()) return; // let default behavior
-    const parsed = parsePastedDate(text.trim());
-    if (!parsed) {
-        // Try tolerant fallback: Date.parse
-        const fallback = new Date(text.trim());
-        if (isNaN(fallback.getTime())) return; // allow native paste
-        setParsedDate(which, fallback);
-        e.preventDefault();
-        return;
-    }
-    setParsedDate(which, parsed);
-    e.preventDefault(); // prevent raw text from entering field
-}
-
-function setParsedDate(which, dateObj) {
-    const dateEl = document.getElementById(which + 'Date');
-    const timeEl = document.getElementById(which + 'Time');
-    if (!dateEl || !timeEl) return;
-    dateEl.value = formatDateUTC(dateObj);
-    timeEl.value = formatTimeUTC(dateObj);
-    setStatus('✓ Parsed pasted date/time');
-}
-
-function formatDateUTC(d) {
-    const y = d.getUTCFullYear();
-    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(d.getUTCDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-}
-function formatTimeUTC(d) {
-    const hh = String(d.getUTCHours()).padStart(2, '0');
-    const mm = String(d.getUTCMinutes()).padStart(2, '0');
-    const ss = String(d.getUTCSeconds()).padStart(2, '0');
-    return `${hh}:${mm}:${ss}`;
-}
-
-function parsePastedDate(str) {
-    let s = str.trim();
-    if (!s) return null;
-    // Strip surrounding quotes/backticks
-    s = s.replace(/^["'`]|["'`]$/g, '');
-    // Epoch seconds (10 digits) or ms (13 digits)
-    if (/^\d{10}$/.test(s)) {
-        const secs = parseInt(s, 10);
-        return new Date(secs * 1000);
-    }
-    if (/^\d{13}$/.test(s)) {
-        const ms = parseInt(s, 10);
-        return new Date(ms);
-    }
-    // ISO with T (timezone optional)
-    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
-        // If no timezone specified append Z
-        if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) {
-            s += 'Z';
-        }
-        // Normalize offset -0400 => -04:00
-        s = s.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
-        const d = new Date(s);
-        if (!isNaN(d.getTime())) return d;
-    }
-    // Date + space time (YYYY-MM-DD HH:mm[:ss])
-    if (/^\d{4}-\d{2}-\d{2} /.test(s)) {
-        let iso = s.replace(' ', 'T');
-        if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(iso)) iso += 'Z';
-        iso = iso.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
-        const d = new Date(iso);
-        if (!isNaN(d.getTime())) return d;
-    }
-    // YYYY/MM/DD formats
-    if (/^\d{4}[/-]\d{1,2}[/-]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/.test(s)) {
-        const parts = s.split(/[ T]/);
-        const datePart = parts[0];
-        const [y, m, dDay] = datePart.split(/[/-]/).map(x => parseInt(x, 10));
-        let hour = 0, min = 0, sec = 0;
-        if (parts[1]) {
-            const timeParts = parts[1].split(':').map(x => parseInt(x, 10));
-            hour = timeParts[0] || 0; min = timeParts[1] || 0; sec = timeParts[2] || 0;
-        }
-        if (m>=1 && m<=12 && dDay>=1 && dDay<=31) {
-            return new Date(Date.UTC(y, m-1, dDay, hour, min, sec));
-        }
-    }
-    // Slash dates mm/dd/yyyy or dd/mm/yyyy (optional time & AM/PM)
-    const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ ,T]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM|am|pm))?)?$/);
-    if (slash) {
-        let a = parseInt(slash[1], 10); // first
-        let b = parseInt(slash[2], 10); // second
-        const year = parseInt(slash[3], 10);
-        let hour = slash[4] ? parseInt(slash[4], 10) : 0;
-        const minute = slash[5] ? parseInt(slash[5], 10) : 0;
-        const second = slash[6] ? parseInt(slash[6], 10) : 0;
-        const ampm = slash[7];
-        let month, day;
-        if (a > 12) { day = a; month = b; } // day-first
-        else if (b > 12) { month = a; day = b; } // month-first
-        else { month = a; day = b; } // ambiguous -> assume month/day
-        if (ampm) {
-            const upper = ampm.toUpperCase();
-            if (upper === 'PM' && hour < 12) hour += 12;
-            if (upper === 'AM' && hour === 12) hour = 0;
-        }
-        if (month>=1 && month<=12 && day>=1 && day<=31) {
-            return new Date(Date.UTC(year, month-1, day, hour, minute, second));
-        }
-    }
-    // Fallback generic parse
-    const d = new Date(s);
-    if (!isNaN(d.getTime())) return d;
-    return null;
-}
-
-// Attach handlers once DOM is ready (file executes after elements exist)
-attachDatePasteHandlers();
-
-function copyStartToEnd() {
-    const startDate = document.getElementById('startDate').value;
-    const startTime = document.getElementById('startTime').value;
-    document.getElementById('endDate').value = startDate;
-    document.getElementById('endTime').value = startTime;
-}
-
-function toggleTimeMode() {
-    const activeBtn = document.querySelector('.mode-btn.active');
-    const mode = activeBtn ? activeBtn.dataset.mode : 'relative';
-    const relativeInputs = document.querySelectorAll('.relative-time');
-    const absoluteInputs = document.querySelectorAll('.absolute-time');
-
-    if (mode === 'relative') {
-        relativeInputs.forEach(el => el.style.display = '');
-        absoluteInputs.forEach(el => el.style.display = 'none');
-    } else {
-        relativeInputs.forEach(el => el.style.display = 'none');
-        absoluteInputs.forEach(el => el.style.display = '');
-    }
-}
-
-function currentTimeRange() {
-    const activeBtn = document.querySelector('.mode-btn.active');
-    const mode = activeBtn ? activeBtn.dataset.mode : 'relative';
-    if (mode === 'absolute') {
-        const startDate = document.getElementById('startDate').value;
-        const startTime = document.getElementById('startTime').value;
-        const endDate = document.getElementById('endDate').value;
-        const endTime = document.getElementById('endTime').value;
-        
-        // Validate that all absolute time fields are filled
-        if (!startDate || !startTime) {
-            throw new Error('Start date and time are required for absolute time range');
-        }
-        if (!endDate || !endTime) {
-            throw new Error('End date and time are required for absolute time range');
-        }
-        
-        const startStr = `${startDate}T${startTime}Z`;
-        const endStr = `${endDate}T${endTime}Z`;
-        const startMs = new Date(startStr).getTime();
-        const endMs = new Date(endStr).getTime();
-        
-        // Validate that the dates are valid
-        if (isNaN(startMs)) {
-            throw new Error('Invalid start date/time format');
-        }
-        if (isNaN(endMs)) {
-            throw new Error('Invalid end date/time format');
-        }
-        
-        // Validate that start is before end
-        if (startMs >= endMs) {
-            throw new Error('Start time must be before end time');
-        }
-        
-        return {
-            start: startMs,
-            end: endMs
-        };
-    } else {
-        // Calculate milliseconds from relative value and unit
-        const unitMultipliers = {
-            minutes: 60 * 1000,
-            hours: 60 * 60 * 1000,
-            days: 24 * 60 * 60 * 1000
-        };
-        const ms = relativeValue * (unitMultipliers[relativeUnit] || unitMultipliers.hours);
-        return { start: Date.now() - ms, end: Date.now() };
-    }
-}
-
-function getSelectedLogGroups() {
-    const container = document.getElementById('lgList');
-    if (!container) return [];
-    return Array.from(container.querySelectorAll('.lg-item.selected')).map(item => item.dataset.name).filter(Boolean);
-}
-
-function highlightQuery(text) {
-    if (!text) return '';
-    const lines = text.split('\n');
-    return lines.map(line => highlightLine(line)).join('\n');
-}
-
-function highlightLine(line) {
-    if (!line) return '\n';
-    let result = '';
-    let i = 0;
-    while (i < line.length) {
-        // Skip whitespace
-        if (/\s/.test(line[i])) {
-            result += line[i];
-            i++;
-            continue;
-        }
-
-        // Comments (# to end of line)
-        if (line[i] === '#') {
-            result += `<span class="token-comment">${escapeHtml(line.slice(i))}</span>`;
-            break;
-        }
-
-        // Strings (single or double quoted)
-        if (line[i] === '"' || line[i] === "'") {
-            const quote = line[i];
-            let end = i + 1;
-            while (end < line.length && line[end] !== quote) {
-                if (line[end] === '\\') end++;
-                end++;
-            }
-            if (end < line.length) end++;
-            result += `<span class="token-string">${escapeHtml(line.slice(i, end))}</span>`;
-            i = end;
-            continue;
-        }
-
-        // Regex patterns /pattern/
-        if (line[i] === '/') {
-            let end = i + 1;
-            while (end < line.length && line[end] !== '/') {
-                if (line[end] === '\\') end++;
-                end++;
-            }
-            if (end < line.length) end++;
-            result += `<span class="token-regex">${escapeHtml(line.slice(i, end))}</span>`;
-            i = end;
-            continue;
-        }
-
-        // Numbers
-        if (/\d/.test(line[i])) {
-            let end = i;
-            while (end < line.length && /[\d.]/.test(line[end])) end++;
-            result += `<span class="token-number">${escapeHtml(line.slice(i, end))}</span>`;
-            i = end;
-            continue;
-        }
-
-        // Operators and punctuation
-        if (/[|=<>!+\-*/%(),\[\]]/.test(line[i])) {
-            result += `<span class="token-operator">${escapeHtml(line[i])}</span>`;
-            i++;
-            continue;
-        }
-
-        // Words (keywords, functions, operators, identifiers)
-        if (/[a-zA-Z_@]/.test(line[i])) {
-            let end = i;
-            while (end < line.length && /[a-zA-Z0-9_@.]/.test(line[end])) end++;
-            const word = line.slice(i, end);
-            const lowerWord = word.toLowerCase();
-
-            if (KEYWORDS.includes(lowerWord)) {
-                result += `<span class="token-keyword">${escapeHtml(word)}</span>`;
-            } else if (FUNCTIONS.includes(lowerWord)) {
-                result += `<span class="token-function">${escapeHtml(word)}</span>`;
-            } else if (OPERATORS.includes(lowerWord)) {
-                result += `<span class="token-operator">${escapeHtml(word)}</span>`;
-            } else if (word.startsWith('@')) {
-                result += `<span class="token-field">${escapeHtml(word)}</span>`;
-            } else {
-                result += `<span class="token-text">${escapeHtml(word)}</span>`;
-            }
-            i = end;
-            continue;
-        }
-
-        // Default
-        result += escapeHtml(line[i]);
-        i++;
-    }
-
-    return result;
-}
-
-function escapeHtml(text) {
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
-// JSON syntax highlight (simple, aligns with existing token colors) for expanded log row details
-function jsonToHighlightedHtml(obj) {
-    let jsonStr;
-    try { jsonStr = JSON.stringify(obj, null, 2); } catch { jsonStr = String(obj); }
-    const esc = escapeHtml(jsonStr);
-    // Regex based tokenization: keys, strings, numbers, booleans, null
-    return esc
-        .replace(/(&quot;.*?&quot;)(?=\s*:)/g, '<span class="token-field">$1</span>') // keys
-        .replace(/:&nbsp;?(&quot;.*?&quot;)/g, ': <span class="token-string">$1</span>')
-        .replace(/(&quot;.*?&quot;)/g, '<span class="token-string">$1</span>') // any remaining strings
-        .replace(/\b(true|false)\b/g, '<span class="token-operator">$1</span>')
-        .replace(/\b(null)\b/g, '<span class="token-operator">$1</span>')
-        .replace(/(-?\b\d+(?:\.\d+)?\b)/g, '<span class="token-number">$1</span>');
-}
-
-// Basic JSON -> YAML converter (no anchors, handles objects/arrays/primitives)
-function jsonToYaml(root) {
-    const lines = [];
-    const quoteIfNeeded = (s) => {
-        if (s === '') return '""';
-        if (/^(?:true|false|null|[-+]?[0-9]+(?:\.[0-9]+)?)$/i.test(s)) return '"' + s + '"';
-        if (/[:\-?&*!|>'"@`{}#%\n\t]/.test(s)) return JSON.stringify(s);
-        return s;
+  }
+  function createInitialAppState() {
+    return {
+      tabs: [],
+      activeTabId: null,
+      runningQueryTabId: null,
+      nextTabId: 1,
+      favorites: [],
+      savedQueries: [],
+      savedQueriesSource: "aws",
+      logGroups: [],
+      timeMode: "relative",
+      relative: { value: 1, unit: "hours" }
     };
-    const indent = (lvl) => '  '.repeat(lvl);
-    const emit = (lvl, text) => lines.push(indent(lvl) + text);
-    const isScalar = (v) => v === null || ['string','number','boolean'].includes(typeof v);
-    function walk(val, lvl) {
-        if (val === null) { emit(lvl, 'null'); return; }
-        if (Array.isArray(val)) {
-            if (!val.length) { emit(lvl, '[]'); return; }
-            val.forEach(item => {
-                if (isScalar(item)) {
-                    if (typeof item === 'string' && /\n/.test(item)) {
-                        emit(lvl, '- |');
-                        item.split('\n').forEach(l => emit(lvl + 1, l));
-                    } else {
-                        emit(lvl, '- ' + (typeof item === 'string' ? quoteIfNeeded(item) : String(item)));
-                    }
-                } else {
-                    // complex value
-                    emit(lvl, '-');
-                    walk(item, lvl + 1);
-                }
-            });
-            return;
-        }
-        if (typeof val === 'object') {
-            const keys = Object.keys(val);
-            if (!keys.length) { emit(lvl, '{}'); return; }
-            keys.forEach(k => {
-                const v = val[k];
-                if (isScalar(v)) {
-                    if (typeof v === 'string' && /\n/.test(v)) {
-                        emit(lvl, k + ': |');
-                        v.split('\n').forEach(l => emit(lvl + 1, l));
-                    } else {
-                        emit(lvl, k + ': ' + (typeof v === 'string' ? quoteIfNeeded(v) : String(v)));
-                    }
-                } else if (Array.isArray(v)) {
-                    if (!v.length) { emit(lvl, k + ': []'); }
-                    else {
-                        emit(lvl, k + ':');
-                        walk(v, lvl + 1);
-                    }
-                } else { // object
-                    const childKeys = Object.keys(v);
-                    if (!childKeys.length) { emit(lvl, k + ': {}'); }
-                    else {
-                        emit(lvl, k + ':');
-                        walk(v, lvl + 1);
-                    }
-                }
-            });
-            return;
-        }
-        if (typeof val === 'string') {
-            if (/\n/.test(val)) {
-                emit(lvl, '|');
-                val.split('\n').forEach(l => emit(lvl + 1, l));
-            } else {
-                emit(lvl, quoteIfNeeded(val));
-            }
-            return;
-        }
-        if (typeof val === 'number' || typeof val === 'boolean') { emit(lvl, String(val)); return; }
-        emit(lvl, JSON.stringify(val));
-    }
-    walk(root, 0);
-    return lines.join('\n');
-}
+  }
 
-function highlightYaml(yamlText) {
-    // Avoid highlighting inside block scalars (lines after a | or > until dedent)
-    const lines = yamlText.split('\n');
-    const result = [];
-    let inBlock = false;
-    let blockIndent = 0;
-    for (const line of lines) {
-        if (!inBlock) {
-            const trimmed = line.trimEnd();
-            // Detect block scalar start: key: |, key: >, '|', '>', '- |', '- >'
-            if (/^\s*[^:#]+:\s*[|>][-+]?\s*$/.test(trimmed) || /^\s*[|>][-+]?\s*$/.test(trimmed) || /^\s*-\s*[|>][-+]?\s*$/.test(trimmed)) {
-                inBlock = true;
-                // Indent baseline: next lines must be more indented than current line
-                blockIndent = (/^\s*/.exec(line)?.[0].length || 0) + 1; // allow 1-space deeper
-                result.push(escapeHtml(line));
-                continue; // skip normal highlighting for block indicator line
-            }
-            // Highlight keys and scalars on this line only if not a pure block indicator
-            let hl = escapeHtml(line)
-                .replace(/^(\s*)([^\s][^:]*?):/g, (m, indent, key) => `${indent}<span class="token-field">${escapeHtml(key)}</span>:`)
-                .replace(/\b(true|false|null)\b/g, '<span class="token-operator">$1</span>')
-                .replace(/(-?\b\d+(?:\.\d+)?\b)/g, '<span class="token-number">$1</span>')
-                .replace(/(&quot;.*?&quot;)/g, '<span class="token-string">$1</span>');
-            result.push(hl);
-        } else {
-            // Inside block scalar – escape only
-            result.push(escapeHtml(line));
-            const currentIndent = /^\s*/.exec(line)?.[0].length || 0;
-            if (line.trim() === '' || currentIndent < blockIndent) {
-                // Dedent ends block
-                inBlock = false;
-            }
-        }
-    }
-    return result.join('\n');
-}
-
-function buildRowDetailObject(rowData) {
-    const obj = {};
-    // rowData.fields : [{ field, value }]
-    rowData.fields.forEach(f => { if (f.field !== '@ptr') obj[f.field] = f.value; });
-    return obj;
-}
-
-function toggleRowDetails(tr, rowData) {
-    const already = tr.nextSibling && tr.nextSibling.classList && tr.nextSibling.classList.contains('detail-row');
-    const expandBtn = tr.querySelector('.expand-btn');
-    if (already) {
-        tr.parentNode.removeChild(tr.nextSibling);
-        if (expandBtn) { expandBtn.textContent = '›'; expandBtn.title = 'Show details'; }
-        return;
-    }
-    // Build detail row
-    const detailTr = document.createElement('tr');
-    detailTr.className = 'detail-row';
-    const td = document.createElement('td');
-    td.colSpan = tr.children.length; // span across all columns
-    const pre = document.createElement('pre');
-    pre.className = 'detail-json';
-    // Only show the @message field content (raw) for clarity
-    const messageField = rowData.fields.find(f => f.field === '@message');
-    const messageValue = messageField ? messageField.value : '(no @message)';
-    // Detect JSON structure (object or array). Parse once, then convert to YAML for compact view.
-    if (messageValue && /^(\s*[\[{])/.test(messageValue)) {
-        try {
-            const parsed = JSON.parse(messageValue);
-            const yaml = jsonToYaml(parsed);
-            pre.innerHTML = highlightYaml(yaml);
-        } catch (_) {
-            // Fallback to raw text if parse fails
-            pre.textContent = messageValue || '';
-        }
-    } else {
-        pre.textContent = messageValue || '';
-    }
-    td.appendChild(pre);
-    detailTr.appendChild(td);
-    tr.parentNode.insertBefore(detailTr, tr.nextSibling);
-    if (expandBtn) { expandBtn.textContent = '⌄'; expandBtn.title = 'Hide details'; }
-}
-
-// Collapse detail row (if present) for a given main data row
-function collapseRowDetail(tr) {
-    if (!tr || !tr.parentNode) return;
-    const expandBtn = tr.querySelector('.expand-btn');
-    const next = tr.nextSibling;
-    if (next && next.classList && next.classList.contains('detail-row')) {
-        tr.parentNode.removeChild(next);
-        if (expandBtn) { expandBtn.textContent = '›'; expandBtn.title = 'Show details'; }
-    }
-}
-
-// Syntax highlighting for CloudWatch Logs Insights
-const KEYWORDS = ['fields', 'filter', 'sort', 'stats', 'limit', 'display', 'parse', 'by', 'as', 'asc', 'desc', 'dedup', 'head', 'tail'];
-const FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'earliest', 'latest', 'pct', 'stddev', 'concat', 'strlen', 'toupper', 'tolower', 'trim', 'ltrim', 'rtrim', 'contains', 'replace', 'strcontains', 'ispresent', 'isblank', 'isempty', 'isnull', 'coalesce', 'bin', 'diff', 'floor', 'ceil', 'abs', 'log', 'sqrt', 'exp'];
-const OPERATORS = ['like', 'in', 'and', 'or', 'not', 'regex', 'match'];
-
-function getQueryText() {
-    const editor = document.getElementById('query');
-    return editor.value || '';
-}
-
-function setQueryText(text) {
-    const editor = document.getElementById('query');
-    editor.value = text;
-    updateSyntaxHighlighting();
-}
-
-// Debounced persistence of last edited query to extension
-let persistTimer = null;
-function schedulePersistLastQuery() {
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(() => {
-        try {
-            const q = getQueryText();
-            vscode.postMessage({ type: 'updateLastQuery', query: q });
-        } catch (_) { /* ignore */ }
-    }, 400); // 400ms debounce
-}
-
-// ========== TAB MANAGEMENT ==========
-
-function createTab(options = {}) {
-    const tab = {
-        id: nextTabId++,
-        name: options.name || 'Results',
-        isCustomName: options.isCustomName || false,
-        timestamp: Date.now(),
-        query: options.query || '',
-        logGroups: options.logGroups || [],
-        region: options.region || '',
-        timeRange: options.timeRange || { start: 0, end: 0 },
-        results: options.results || null,
-        searchQuery: '',
-        searchIndex: -1,
-        columnFilters: {},
-        expandedRows: new Set(),
-        scrollPosition: 0,
-        isStreaming: options.isStreaming || false,
-        status: ''
-    };
-    tabs.push(tab);
-    
-    // Create a results container for this tab
-    createTabResultsContainer(tab.id);
-    
-    return tab;
-}
-
-function createTabResultsContainer(tabId) {
-    const container = document.getElementById('results-container');
-    if (!container) return;
-    
-    const resultsDiv = document.createElement('div');
-    resultsDiv.id = `results-${tabId}`;
-    resultsDiv.className = 'results';
-    resultsDiv.dataset.tabId = tabId;
-    
-    container.appendChild(resultsDiv);
-}
-
-function getTabResultsContainer(tabId) {
-    return document.getElementById(`results-${tabId}`);
-}
-
-function getActiveResultsContainer() {
-    const activeTab = getActiveTab();
-    return activeTab ? getTabResultsContainer(activeTab.id) : null;
-}
-
-function formatTimestamp(timestamp) {
-    const d = new Date(timestamp);
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
-    const seconds = String(d.getSeconds()).padStart(2, '0');
-    return `${hours}:${minutes}:${seconds}`;
-}
-
-function getActiveTab() {
-    return tabs.find(t => t.id === activeTabId);
-}
-
-function getRowCountText() {
-    const activeTab = getActiveTab();
-    if (!activeTab || !activeTab.results || !activeTab.results.rows) {
-        return '';
-    }
-    
-    const totalRows = activeTab.results.rows.length;
-    
-    // Check if there are active filters
-    if (activeTab.columnFilters && Object.keys(activeTab.columnFilters).length > 0) {
-        // Count visible rows based on filters
-        let visibleRows = 0;
-        for (let i = 0; i < activeTab.results.rows.length; i++) {
-            const row = activeTab.results.rows[i];
-            let shouldShow = true;
-            
-            for (const [fieldName, allowedValues] of Object.entries(activeTab.columnFilters)) {
-                if (allowedValues.size === 0) {
-                    shouldShow = false;
-                    break;
-                }
-                
-                const fieldObj = row.fields.find(f => f.field === fieldName);
-                const value = fieldObj ? fieldObj.value : '';
-                
-                if (!allowedValues.has(value)) {
-                    shouldShow = false;
-                    break;
-                }
-            }
-            
-            if (shouldShow) visibleRows++;
-        }
-        
-        return ` (${visibleRows} of ${totalRows} rows)`;
-    }
-    
-    return ` (${totalRows} rows)`;
-}
-
-function saveCurrentTabState() {
-    const tab = getActiveTab();
-    if (!tab) return;
-    
-    // Save current results
-    tab.results = currentResults;
-    
-    // Save current status
-    const statusEl = document.getElementById('status');
-    tab.status = statusEl ? statusEl.textContent : '';
-    
-    // Save search state
-    const searchInput = document.getElementById('searchInput');
-    tab.searchQuery = searchInput ? searchInput.value : '';
-    tab.searchIndex = currentSearchMatchIndex || -1;
-    
-    // Save column filters (deep clone the Sets)
+  // src/webview/core/stateActions.ts
+  function updateTab(state2, tabId, updates) {
+    const tab = state2.tabs.find((t) => t.id === tabId);
+    if (!tab) return false;
+    Object.assign(tab, updates);
+    return true;
+  }
+  function resetTabForNewQuery(state2, tabId, query, logGroups, region, timeRange) {
+    const tab = state2.tabs.find((t) => t.id === tabId);
+    if (!tab) return false;
+    tab.query = query;
+    tab.logGroups = logGroups;
+    tab.region = region;
+    tab.timeRange = timeRange;
+    tab.results = null;
+    tab.isStreaming = true;
+    tab.searchQuery = "";
+    tab.searchIndex = -1;
     tab.columnFilters = {};
-    for (const [fieldName, allowedValues] of Object.entries(activeFilters)) {
-        tab.columnFilters[fieldName] = new Set(allowedValues);
+    tab.expandedRows = /* @__PURE__ */ new Set();
+    tab.scrollPosition = 0;
+    tab.status = "Running query...";
+    return true;
+  }
+  function completeTabQuery(state2, tabId, results) {
+    const tab = state2.tabs.find((t) => t.id === tabId);
+    if (!tab) return false;
+    tab.results = results;
+    tab.isStreaming = false;
+    tab.status = `\u2713 Query Complete (${results.rows.length} rows)`;
+    return true;
+  }
+  function setTabError(state2, tabId, error) {
+    const tab = state2.tabs.find((t) => t.id === tabId);
+    if (!tab) return false;
+    tab.status = `Error: ${error}`;
+    tab.isStreaming = false;
+    return true;
+  }
+  function setTabStatus(state2, tabId, status, isStreaming) {
+    const tab = state2.tabs.find((t) => t.id === tabId);
+    if (!tab) return false;
+    tab.status = status;
+    if (isStreaming !== void 0) {
+      tab.isStreaming = isStreaming;
     }
-    
-    // Save scroll position from the tab's own results container
-    const resultsDiv = getTabResultsContainer(tab.id);
-    tab.scrollPosition = resultsDiv ? resultsDiv.scrollTop : 0;
-    
-    // Save expanded rows
-    if (resultsDiv) {
-        const table = resultsDiv.querySelector('table tbody');
-        if (table) {
-            tab.expandedRows = new Set();
-            table.querySelectorAll('tr[data-row-index]').forEach(tr => {
-                const next = tr.nextSibling;
-                if (next && next.classList && next.classList.contains('detail-row')) {
-                    tab.expandedRows.add(tr.dataset.rowIndex);
-                }
-            });
-        }
-    }
-}
+    return true;
+  }
+  function setTabName(state2, tabId, name, isCustomName = true) {
+    const tab = state2.tabs.find((t) => t.id === tabId);
+    if (!tab) return false;
+    tab.name = name;
+    tab.isCustomName = isCustomName;
+    return true;
+  }
+  function setTabColumnFilters(state2, tabId, columnFilters) {
+    const tab = state2.tabs.find((t) => t.id === tabId);
+    if (!tab) return false;
+    tab.columnFilters = columnFilters;
+    return true;
+  }
 
-function restoreTabUIState(tab) {
-    if (!tab) return;
-    
-    // Update currentResults reference
-    currentResults = tab.results;
-    
-    // Restore status
-    setStatus(tab.status || '');
-    
-    // Restore column filters (deep clone the Sets)
-    activeFilters = {};
-    if (tab.columnFilters) {
-        for (const [fieldName, allowedValues] of Object.entries(tab.columnFilters)) {
-            activeFilters[fieldName] = new Set(allowedValues);
-        }
+  // src/webview/core/state.ts
+  var state = createInitialAppState();
+  function ensureFirstTab() {
+    if (state.tabs.length === 0) {
+      const tab = createInitialTab(state.nextTabId++);
+      state.tabs.push(tab);
+      state.activeTabId = tab.id;
+      return tab;
     }
-    
-    // Update filter indicators
-    updateFilterIndicators();
-    
-    // Restore search state
-    const searchInput = document.getElementById('searchInput');
-    if (searchInput) {
-        searchInput.value = tab.searchQuery || '';
-        // Note: search highlighting is already in the DOM, no need to re-run
+    return getActiveTab() || state.tabs[0];
+  }
+  function createTab(name = "Results") {
+    const tab = createInitialTab(state.nextTabId++);
+    tab.name = name;
+    state.tabs.push(tab);
+    state.activeTabId = tab.id;
+    return tab;
+  }
+  function getActiveTab() {
+    return state.tabs.find((t) => t.id === state.activeTabId);
+  }
+  function switchToTab(id) {
+    if (!state.tabs.some((t) => t.id === id)) return void 0;
+    state.activeTabId = id;
+    return getActiveTab();
+  }
+  function closeTab(id) {
+    const idx = state.tabs.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+    state.tabs.splice(idx, 1);
+    if (state.activeTabId === id) {
+      state.activeTabId = state.tabs.length ? state.tabs[Math.max(0, idx - 1)].id : null;
     }
-    
-    // Restore scroll position
-    const resultsDiv = getTabResultsContainer(tab.id);
-    if (resultsDiv && tab.scrollPosition !== undefined) {
-        resultsDiv.scrollTop = tab.scrollPosition;
-    }
-}
+  }
+  function setRunningQueryTab(id) {
+    state.runningQueryTabId = id;
+  }
+  function getState() {
+    return state;
+  }
 
-function restoreTabState(tab) {
-    if (!tab) return;
-    
-    // Restore results
-    currentResults = tab.results;
-    if (tab.results) {
-        renderResults(tab.results, true); // Skip clearing filters during restore
-        
-        // Restore column filters only if we have results (deep clone the Sets)
-        activeFilters = {};
-        if (tab.columnFilters) {
-            for (const [fieldName, allowedValues] of Object.entries(tab.columnFilters)) {
-                activeFilters[fieldName] = new Set(allowedValues);
-            }
-        }
-        applyColumnFilters();
-        updateFilterIndicators(); // Update column header filter button states
-    } else {
-        const resultsDiv = getTabResultsContainer(tab.id);
-        if (resultsDiv) resultsDiv.innerHTML = '';
-        
-        // Clear filters when no results
-        activeFilters = {};
-    }
-    
-    // Restore search state
-    const searchInput = document.getElementById('searchInput');
-    if (searchInput) {
-        searchInput.value = tab.searchQuery || '';
-        if (tab.searchQuery && tab.results) {
-            searchResults();
-        }
-    }
-    
-    // Restore scroll position and expanded rows only if we have results
-    if (tab.results) {
-        setTimeout(() => {
-            const resultsDiv = getTabResultsContainer(tab.id);
-            if (resultsDiv) resultsDiv.scrollTop = tab.scrollPosition || 0;
-            
-            // Restore expanded rows
-            if (tab.expandedRows && tab.expandedRows.size > 0) {
-                const table = resultsDiv ? resultsDiv.querySelector('table tbody') : null;
-                if (table) {
-                    tab.expandedRows.forEach(rowIndex => {
-                        const tr = table.querySelector(`tr[data-row-index="${rowIndex}"]`);
-                        if (tr && tab.results && tab.results.rows) {
-                            const rowData = tab.results.rows[parseInt(rowIndex)];
-                            if (rowData) {
-                                toggleRowDetail(tr, rowData);
-                            }
-                        }
-                    });
-                }
-            }
-        }, 50);
-    }
-}
+  // src/webview/features/tabs/model.ts
+  function createTabResultsContainer(tabId) {
+    const container = document.getElementById("results-container");
+    if (!container) return;
+    const resultsDiv = document.createElement("div");
+    resultsDiv.id = `results-${tabId}`;
+    resultsDiv.className = "results";
+    resultsDiv.dataset.tabId = String(tabId);
+    container.appendChild(resultsDiv);
+  }
+  function createNewTab(name) {
+    const tab = createTab(name);
+    createTabResultsContainer(tab.id);
+    return tab;
+  }
+  function switchToTab2(id) {
+    return switchToTab(id);
+  }
+  function closeTab2(id) {
+    closeTab(id);
+  }
+  function initTabsModel() {
+    ensureFirstTab();
+  }
 
-function switchToTab(tabId) {
-    if (activeTabId === tabId) return;
-    
-    // Save current tab state (scroll position, expanded rows, search state)
-    saveCurrentTabState();
-    
-    // Hide all tab result containers
-    const allResults = document.querySelectorAll('.results');
-    allResults.forEach(r => r.classList.remove('active'));
-    
-    // Show the target tab's result container
-    const targetResults = getTabResultsContainer(tabId);
-    if (targetResults) {
-        targetResults.classList.add('active');
-    }
-    
-    // Switch active tab
-    activeTabId = tabId;
-    
-    // Get the tab we're switching to
-    const tab = getActiveTab();
-    
-    // Check if tab has results but they haven't been rendered yet
-    // (this happens when a query completes in a background tab)
-    const hasTable = targetResults && targetResults.querySelector('table');
-    if (tab && tab.results && targetResults && !hasTable) {
-        // Render results for the first time (background query completed)
-        restoreTabState(tab);
-    } else {
-        // Just restore UI state (results already in DOM or no results)
-        restoreTabUIState(tab);
-    }
-    
-    // Update tab bar UI
-    renderTabs();
-}
-
-function renderTabs() {
-    const tabList = document.getElementById('tabList');
+  // src/webview/features/tabs/render.ts
+  function renderTabs() {
+    const tabList = document.getElementById("tabList");
     if (!tabList) return;
-    
-    tabList.innerHTML = '';
-    
-    tabs.forEach(tab => {
-        const tabItem = document.createElement('div');
-        tabItem.className = 'tab-item';
-        tabItem.dataset.tabId = tab.id;
-        if (tab.id === activeTabId) tabItem.classList.add('active');
-        if (tab.isStreaming) tabItem.classList.add('streaming');
-        
-        const tabContent = document.createElement('div');
-        tabContent.className = 'tab-content';
-        
-        const tabName = document.createElement('div');
-        tabName.className = 'tab-name';
-        tabName.textContent = tab.name;
-        tabName.title = tab.name;
-        
-        const tabInfo = document.createElement('div');
-        tabInfo.className = 'tab-info';
-        
-        // Calculate row count from results, considering filters
-        if (tab.results && tab.results.rows) {
-            const totalRows = tab.results.rows.length;
-            
-            // Check if this tab has active column filters
-            if (tab.columnFilters && Object.keys(tab.columnFilters).length > 0) {
-                // Calculate visible rows based on filters
-                let visibleRows = 0;
-                for (let i = 0; i < tab.results.rows.length; i++) {
-                    const row = tab.results.rows[i];
-                    let shouldShow = true;
-                    
-                    // Check each active filter
-                    for (const [fieldName, allowedValues] of Object.entries(tab.columnFilters)) {
-                        if (allowedValues.size === 0) {
-                            shouldShow = false;
-                            break;
-                        }
-                        
-                        // Find the field value in the row
-                        const fieldObj = row.fields.find(f => f.field === fieldName);
-                        const value = fieldObj ? fieldObj.value : '';
-                        
-                        if (!allowedValues.has(value)) {
-                            shouldShow = false;
-                            break;
-                        }
-                    }
-                    
-                    if (shouldShow) visibleRows++;
-                }
-                
-                tabInfo.textContent = `${visibleRows} of ${totalRows} rows`;
-            } else {
-                tabInfo.textContent = `${totalRows} rows`;
-            }
-        } else {
-            tabInfo.textContent = 'No data';
-        }
-        
-        tabContent.appendChild(tabName);
-        tabContent.appendChild(tabInfo);
-        
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'tab-close-btn';
-        closeBtn.innerHTML = '×';
-        closeBtn.title = 'Close tab';
-        closeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            closeTab(tab.id);
-        });
-        
-        tabItem.appendChild(tabContent);
-        tabItem.appendChild(closeBtn);
-        
-        tabItem.addEventListener('click', () => switchToTab(tab.id));
-        
-        // Double-click to rename
-        tabContent.addEventListener('dblclick', (e) => {
-            e.stopPropagation();
-            renameTab(tab.id);
-        });
-        
-        // Right-click context menu
-        tabItem.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            showTabContextMenu(e, tab.id);
-        });
-        
-        tabList.appendChild(tabItem);
-    });
-}
-
-function closeTab(tabId) {
-    const tab = tabs.find(t => t.id === tabId);
-    if (!tab) return;
-    
-    const tabIndex = tabs.findIndex(t => t.id === tabId);
-    if (tabIndex === -1) return;
-    
-    // Remove the tab's results container from the DOM
-    const resultsContainer = getTabResultsContainer(tabId);
-    if (resultsContainer) {
-        resultsContainer.remove();
-    }
-    
-    // Remove tab
-    tabs.splice(tabIndex, 1);
-    
-    // If this was the active tab, switch to another
-    if (activeTabId === tabId) {
-        if (tabs.length > 0) {
-            // Switch to the tab at the same index, or the last tab if out of bounds
-            const newIndex = Math.min(tabIndex, tabs.length - 1);
-            switchToTab(tabs[newIndex].id);
-        } else {
-            // No tabs left, create a new one
-            const newTab = createTab();
-            activeTabId = newTab.id;
-            
-            // Make the new tab's results container active
-            const resultsContainer = getTabResultsContainer(newTab.id);
-            if (resultsContainer) {
-                resultsContainer.classList.add('active');
-            }
-            
-            renderTabs();
-            restoreTabState(newTab);
-        }
-    } else {
-        renderTabs();
-    }
-}
-
-function createNewTab() {
-    // Save current tab state
-    saveCurrentTabState();
-    
-    // Create new tab
-    const newTab = createTab();
-    
-    // Switch to the new tab (this handles showing/hiding properly)
-    switchToTab(newTab.id);
-    
-    // Clear results (the new tab is empty)
-    restoreTabState(newTab);
-}
-
-function renameTab(tabId) {
-    const tab = tabs.find(t => t.id === tabId);
-    if (!tab) return;
-    
-    const tabItem = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
-    if (!tabItem) return;
-    
-    const tabNameDiv = tabItem.querySelector('.tab-name');
-    if (!tabNameDiv) return;
-    
-    // Create input for renaming
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'tab-rename-input';
-    input.value = tab.name;
-    
-    // Replace the tab name with the input
-    const originalText = tabNameDiv.textContent;
-    tabNameDiv.textContent = '';
-    tabNameDiv.appendChild(input);
-    
-    // Focus and select all text
-    input.focus();
-    input.select();
-    
-    const finishRename = (save) => {
-        if (save && input.value.trim()) {
-            tab.name = input.value.trim();
-            tab.isCustomName = true; // Mark as custom name
-        }
-        renderTabs();
-    };
-    
-    // Handle keyboard events
-    input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            finishRename(true);
-        } else if (e.key === 'Escape') {
-            e.preventDefault();
-            finishRename(false);
-        }
-        e.stopPropagation();
-    });
-    
-    // Save on blur
-    input.addEventListener('blur', () => {
-        finishRename(true);
-    });
-    
-    // Prevent click from bubbling to tab switch
-    input.addEventListener('click', (e) => {
-        e.stopPropagation();
-    });
-}
-
-function showTabContextMenu(event, tabId) {
-    // Remove any existing context menu
-    const existingMenu = document.querySelector('.tab-context-menu');
-    if (existingMenu) existingMenu.remove();
-    
-    // Create context menu
-    const menu = document.createElement('div');
-    menu.className = 'tab-context-menu';
-    menu.style.left = event.pageX + 'px';
-    menu.style.top = event.pageY + 'px';
-    
-    // Rename option
-    const renameItem = document.createElement('div');
-    renameItem.className = 'context-menu-item';
-    renameItem.textContent = 'Rename';
-    renameItem.addEventListener('click', () => {
-        menu.remove();
-        renameTab(tabId);
-    });
-    
-    menu.appendChild(renameItem);
-    document.body.appendChild(menu);
-    
-    // Close menu when clicking outside
-    const closeMenu = (e) => {
-        if (!menu.contains(e.target)) {
-            menu.remove();
-            document.removeEventListener('click', closeMenu);
-        }
-    };
-    
-    // Delay adding the click listener to prevent immediate closing
-    setTimeout(() => {
-        document.addEventListener('click', closeMenu);
-    }, 0);
-}
-
-function setTabStreaming(tabId, isStreaming) {
-    const tab = tabs.find(t => t.id === tabId);
-    if (tab) {
-        tab.isStreaming = isStreaming;
-        renderTabs();
-    }
-}
-
-function updateTabName(tabId, name) {
-    const tab = tabs.find(t => t.id === tabId);
-    if (tab) {
-        tab.name = name;
-        tab.isCustomName = true; // Mark as custom name when explicitly updated
-        renderTabs();
-    }
-}
-
-// ========== END TAB MANAGEMENT ==========
-
-function runQuery() {
-    let start, end;
-    try {
-        const timeRange = currentTimeRange();
-        start = timeRange.start;
-        end = timeRange.end;
-    } catch (error) {
-        setStatus(`⚠ ${error.message}`);
-        // Highlight the absolute time controls to draw attention
-        const absoluteTime = document.querySelector('.absolute-time');
-        if (absoluteTime) {
-            absoluteTime.classList.remove('cwlv-pulse-attention');
-            void absoluteTime.offsetWidth; // Force reflow
-            absoluteTime.classList.add('cwlv-pulse-attention');
-            setTimeout(() => absoluteTime.classList.remove('cwlv-pulse-attention'), 1400);
-        }
-        return;
-    }
-    
-    const logGroups = getSelectedLogGroups();
-    const region = document.getElementById('region').value.trim() || 'us-east-2';
-    const query = getQueryText();
-    const runBtn = document.getElementById('runBtn');
-    if (!logGroups.length) {
-        setStatus('⚠ Select at least one log group');
-        pulseLogGroupsAttention();
-        return;
-    }
-    if (!query.trim()) {
-        setStatus('⚠ Query string is empty');
-        return;
-    }
-    
-    // Tab logic: always overwrite current tab with new query results
-    const currentTab = getActiveTab();
-    let targetTab;
-    
-    if (!currentTab || tabs.length === 0) {
-        // No tabs exist, create first one
-        targetTab = createTab({
-            name: `Query ${formatTimestamp(Date.now())}`,
-            query,
-            logGroups,
-            region,
-            timeRange: { start, end },
-            isStreaming: true
-        });
-        activeTabId = targetTab.id;
-        
-        // Ensure the new tab's results container is active
-        const resultsContainer = getTabResultsContainer(targetTab.id);
-        if (resultsContainer) {
-            resultsContainer.classList.add('active');
-        }
-    } else {
-        // Overwrite current tab with new query
-        targetTab = currentTab;
-        // Only update name if it wasn't manually set by user
-        if (!targetTab.isCustomName) {
-            targetTab.name = `Query ${formatTimestamp(Date.now())}`;
-        }
-        targetTab.query = query;
-        targetTab.logGroups = logGroups;
-        targetTab.region = region;
-        targetTab.timeRange = { start, end };
-        targetTab.results = null;
-        targetTab.isStreaming = true;
-        targetTab.searchQuery = '';
-        targetTab.searchIndex = -1;
-        targetTab.columnFilters = {};
-        targetTab.expandedRows = new Set();
-        targetTab.scrollPosition = 0;
-        
-        // Clear current results display - target the specific tab's container
-        const resultsDiv = getTabResultsContainer(targetTab.id);
-        if (resultsDiv) resultsDiv.innerHTML = '';
-        currentResults = null;
-    }
-    
-    renderTabs();
-    
-    // Track which tab is running the query
-    runningQueryTabId = targetTab.id;
-    
-    setStatus('Running query...');
-    if (runBtn) {
-        runBtn.setAttribute('data-state', 'running');
-        runBtn.disabled = false; // Keep enabled so user can abort
-        const label = runBtn.querySelector('.run-btn-label');
-        if (label) label.textContent = 'Cancel Query';
-    }
-    vscode.postMessage({ type: 'runQuery', data: { logGroups, region, query, startTime: start, endTime: end } });
-}
-
-function setStatus(msg) {
-    document.getElementById('status').textContent = msg;
-}
-
-// Briefly pulse-highlight the log groups panel to draw user attention when required selection missing
-function pulseLogGroupsAttention() {
-    try {
-        const panel = document.querySelector('.log-groups-panel');
-        if (!panel) return;
-        // If already pulsing restart the animation by cloning (css animations don't always restart when class re-added quickly)
-        panel.classList.remove('cwlv-pulse-attention');
-        // Force reflow to allow animation restart
-        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-        void panel.offsetWidth;
-        panel.classList.add('cwlv-pulse-attention');
-    // Remove class after single animation completes (~1.1s + buffer)
-    setTimeout(() => panel.classList.remove('cwlv-pulse-attention'), 1400);
-    } catch (_) { /* ignore */ }
-}
-
-function appendPartialResults(partialPayload) {
-    // Merge new rows into currentResults
-    if (!currentResults || !currentResults.rows) {
-        currentResults = { rows: [], fieldOrder: partialPayload.fieldOrder || [], hiddenFields: partialPayload.hiddenFields || ['@ptr'] };
-    }
-    
-    const startIdx = currentResults.rows.length;
-    currentResults.rows.push(...partialPayload.rows);
-    currentResults.fieldOrder = partialPayload.fieldOrder || currentResults.fieldOrder;
-    currentResults.hiddenFields = partialPayload.hiddenFields || currentResults.hiddenFields;
-    
-    const container = getActiveResultsContainer();
-    if (!container) return;
-    
-    let table = container.querySelector('table');
-    let tbody = table ? table.querySelector('tbody') : null;
-    
-    // Filter out hidden fields
-    const hidden = Array.isArray(currentResults.hiddenFields) ? currentResults.hiddenFields : ['@ptr'];
-    const fields = currentResults.fieldOrder.filter(f => !hidden.includes(f));
-    
-    // Create table if first batch
-    if (!table) {
-        invalidateRowCache();
-        clearAllFilters();
-        
-        table = document.createElement('table');
-        const head = document.createElement('thead');
-        const headerRow = document.createElement('tr');
-        
-        const expandHeader = document.createElement('th');
-        expandHeader.className = 'expand-col-header';
-        expandHeader.style.width = '34px';
-        headerRow.appendChild(expandHeader);
-        
-        fields.forEach((f) => {
-            const th = document.createElement('th');
-            th.style.position = 'relative';
-            th.dataset.field = f;
-            const headerContent = document.createElement('div');
-            headerContent.className = 'th-content';
-            const span = document.createElement('span');
-            span.textContent = f;
-            headerContent.appendChild(span);
-            const filterBtn = document.createElement('button');
-            filterBtn.type = 'button';
-            filterBtn.className = 'column-filter-btn';
-            filterBtn.title = `Filter ${f}`;
-            filterBtn.innerHTML = '⋮';
-            filterBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                showColumnFilter(f, filterBtn);
-            });
-            headerContent.appendChild(filterBtn);
-            th.appendChild(headerContent);
-            headerRow.appendChild(th);
-        });
-        
-        head.appendChild(headerRow);
-        table.appendChild(head);
-        tbody = document.createElement('tbody');
-        table.appendChild(tbody);
-        container.innerHTML = '';
-        container.appendChild(table);
-    }
-    
-    // Append new rows to tbody
-    partialPayload.rows.forEach((row, idx) => {
-        const tr = document.createElement('tr');
-        tr.dataset.rowIndex = String(startIdx + idx);
-        
-        const expandCell = document.createElement('td');
-        expandCell.className = 'expand-cell';
-        const expandBtn = document.createElement('button');
-        expandBtn.type = 'button';
-        expandBtn.className = 'expand-btn';
-        expandBtn.innerHTML = '▶';
-        expandBtn.addEventListener('click', () => toggleRowDetail(tr, row));
-        expandCell.appendChild(expandBtn);
-        tr.appendChild(expandCell);
-        
-        fields.forEach(f => {
-            const val = row.fields.find(x => x.field === f)?.value || '';
-            const td = document.createElement('td');
-            td.textContent = val;
-            td.title = val;
-            tr.appendChild(td);
-        });
-        
-        tbody.appendChild(tr);
-    });
-    
-    invalidateRowCache();
-    // Update tab to show current row count during streaming
-    const activeTab = getActiveTab();
-    if (activeTab) {
-        activeTab.results = currentResults;
-    }
-    renderTabs();
-}
-
-function renderResults(payload, skipClearFilters = false) {
-    currentResults = payload;
-    const activeTab = getActiveTab();
-    if (!activeTab) return;
-    
-    const container = getTabResultsContainer(activeTab.id);
-    if (!container) return;
-    
-    container.innerHTML = '';
-    // Results changed – invalidate any cached row references used by search
-    invalidateRowCache();
-    // Clear column filters when new results are loaded (unless restoring tab state)
-    if (!skipClearFilters) {
-        clearAllFilters();
-    }
-
-    // Safety check
-    if (!payload || !payload.fieldOrder || !payload.rows) {
-        container.textContent = 'No results.';
-        return;
-    }
-
-    // Filter out hidden fields (server can send metadata) default to @ptr only
-    const hidden = Array.isArray(payload.hiddenFields) ? payload.hiddenFields : ['@ptr'];
-    const fields = payload.fieldOrder.filter(f => !hidden.includes(f));
-
-    if (!payload.rows.length) {
-        container.textContent = 'No results.';
-        return;
-    }
-
-    const table = document.createElement('table');
-    const head = document.createElement('thead');
-    const headerRow = document.createElement('tr');
-    // Expand column header (blank)
-    const expandHeader = document.createElement('th');
-    expandHeader.className = 'expand-col-header';
-    expandHeader.style.width = '34px';
-    headerRow.appendChild(expandHeader);
-    fields.forEach((f, index) => {
-        const th = document.createElement('th');
-        th.style.position = 'relative';
-        th.dataset.field = f;
-
-        const headerContent = document.createElement('div');
-        headerContent.className = 'th-content';
-
-        const span = document.createElement('span');
-        span.textContent = f;
-        headerContent.appendChild(span);
-
-        // Add filter button
-        const filterBtn = document.createElement('button');
-        filterBtn.type = 'button';
-        filterBtn.className = 'column-filter-btn';
-        filterBtn.title = `Filter ${f}`;
-        filterBtn.innerHTML = '⋮';
-        filterBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            showColumnFilter(f, filterBtn);
-        });
-        headerContent.appendChild(filterBtn);
-
-        th.appendChild(headerContent);
-
-        // Add resize handle (not on last column; account for extra expand column)
-        if (index < fields.length - 1) {
-            const resizer = document.createElement('div');
-            resizer.className = 'column-resizer';
-            resizer.addEventListener('mousedown', (e) => initColumnResize(e, th));
-            th.appendChild(resizer);
-        }
-
-        headerRow.appendChild(th);
-    });
-    head.appendChild(headerRow);
-    table.appendChild(head);
-
-    const body = document.createElement('tbody');
-    payload.rows.forEach((r, idx) => {
-        const tr = document.createElement('tr');
-        tr.dataset.rowIndex = idx;
-
-        // Expand cell
-        const expandCell = document.createElement('td');
-        expandCell.className = 'expand-cell';
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'expand-btn';
-        btn.title = 'Show details';
-        btn.textContent = '›';
-        btn.addEventListener('click', () => toggleRowDetails(tr, r));
-        expandCell.appendChild(btn);
-        tr.appendChild(expandCell);
-
-        fields.forEach(f => {
-            const td = document.createElement('td');
-            const valObj = r.fields.find(x => x.field === f);
-            td.textContent = valObj ? valObj.value : '';
-            td.dataset.field = f;
-            tr.appendChild(td);
-        });
-        body.appendChild(tr);
-    });
-    table.appendChild(body);
-    container.appendChild(table);
-    // Re-run active search (if any term present) after rendering new results
-    setTimeout(() => {
-        if (document.getElementById('searchInput').value.trim()) {
-            searchResults(false, true);
-        }
-    }, 0);
-}
-
-// Column resizing functionality
-let resizingColumn = null;
-let resizeStartX = 0;
-let resizeStartWidth = 0;
-
-function initColumnResize(e, th) {
-    e.preventDefault();
-    resizingColumn = th;
-    resizeStartX = e.pageX;
-    resizeStartWidth = th.offsetWidth;
-
-    document.addEventListener('mousemove', handleColumnResize);
-    document.addEventListener('mouseup', stopColumnResize);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-}
-
-function handleColumnResize(e) {
-    if (!resizingColumn) return;
-    const diff = e.pageX - resizeStartX;
-    const newWidth = Math.max(50, resizeStartWidth + diff); // minimum 50px
-    resizingColumn.style.width = newWidth + 'px';
-    resizingColumn.style.minWidth = newWidth + 'px';
-    resizingColumn.style.maxWidth = newWidth + 'px';
-}
-
-function stopColumnResize() {
-    resizingColumn = null;
-    document.removeEventListener('mousemove', handleColumnResize);
-    document.removeEventListener('mouseup', stopColumnResize);
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-}
-
-// Column filtering functionality
-let activeFilters = {}; // { fieldName: Set(selectedValues) }
-let currentFilterModal = null;
-
-function showColumnFilter(fieldName, buttonElement) {
-    // Close existing modal if any
-    if (currentFilterModal) {
-        currentFilterModal.remove();
-        currentFilterModal = null;
-        return;
-    }
-
-    // Get all distinct values from this column
-    const valueCountMap = getColumnValueCounts(fieldName);
-    
-    // Sort by count descending
-    const sortedValues = Array.from(valueCountMap.entries())
-        .sort((a, b) => b[1] - a[1]);
-
-    // Create modal
-    const modal = document.createElement('div');
-    modal.className = 'column-filter-modal';
-    currentFilterModal = modal;
-
-    // Position modal near the button
-    const rect = buttonElement.getBoundingClientRect();
-    modal.style.position = 'fixed';
-    modal.style.top = `${rect.bottom + 5}px`;
-    modal.style.left = `${rect.left - 150}px`; // offset to align better
-
-    // Modal content
-    const header = document.createElement('div');
-    header.className = 'filter-modal-header';
-    header.textContent = `Filter: ${fieldName}`;
-    modal.appendChild(header);
-
-    // Search input for filtering the values list
-    const searchInput = document.createElement('input');
-    searchInput.type = 'text';
-    searchInput.className = 'filter-search-input';
-    searchInput.placeholder = 'Search values...';
-    modal.appendChild(searchInput);
-
-    // Values list container
-    const valuesList = document.createElement('div');
-    valuesList.className = 'filter-values-list';
-    
-    const renderValuesList = (filterText = '') => {
-        valuesList.innerHTML = '';
-        const lowerFilter = filterText.toLowerCase();
-        const filtered = sortedValues.filter(([value]) => 
-            value.toLowerCase().includes(lowerFilter)
-        );
-
-        if (filtered.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'filter-value-empty';
-            empty.textContent = 'No matching values';
-            valuesList.appendChild(empty);
-            return;
-        }
-
-        filtered.forEach(([value, count]) => {
-            const item = document.createElement('div');
-            item.className = 'filter-value-item';
-            
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.id = `filter-${fieldName}-${value}`;
-            
-            // Check if this value is currently filtered
-            const fieldFilters = activeFilters[fieldName];
-            checkbox.checked = !fieldFilters || fieldFilters.has(value);
-            
-            checkbox.addEventListener('change', () => {
-                toggleFilterValue(fieldName, value);
-            });
-
-            const label = document.createElement('label');
-            label.htmlFor = checkbox.id;
-            label.className = 'filter-value-label';
-            
-            const valueSpan = document.createElement('span');
-            valueSpan.className = 'filter-value-text';
-            valueSpan.textContent = value || '(empty)';
-            
-            const countSpan = document.createElement('span');
-            countSpan.className = 'filter-value-count';
-            countSpan.textContent = count;
-
-            label.appendChild(valueSpan);
-            label.appendChild(countSpan);
-
-            item.appendChild(checkbox);
-            item.appendChild(label);
-            valuesList.appendChild(item);
-        });
-    };
-
-    renderValuesList();
-    searchInput.addEventListener('input', (e) => {
-        renderValuesList(e.target.value);
-    });
-
-    modal.appendChild(valuesList);
-
-    // Action buttons
-    const actions = document.createElement('div');
-    actions.className = 'filter-modal-actions';
-
-    const selectAllBtn = document.createElement('button');
-    selectAllBtn.textContent = 'Select All';
-    selectAllBtn.className = 'filter-action-btn';
-    selectAllBtn.addEventListener('click', () => {
-        delete activeFilters[fieldName];
-        renderValuesList(searchInput.value);
-        applyColumnFilters();
-        updateFilterIndicators();
-    });
-
-    const clearBtn = document.createElement('button');
-    clearBtn.textContent = 'Clear';
-    clearBtn.className = 'filter-action-btn';
-    clearBtn.addEventListener('click', () => {
-        activeFilters[fieldName] = new Set();
-        renderValuesList(searchInput.value);
-        applyColumnFilters();
-        updateFilterIndicators();
-    });
-
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = 'Close';
-    closeBtn.className = 'filter-action-btn filter-close-btn';
-    closeBtn.addEventListener('click', () => {
-        modal.remove();
-        currentFilterModal = null;
-    });
-
-    actions.appendChild(selectAllBtn);
-    actions.appendChild(clearBtn);
-    actions.appendChild(closeBtn);
-    modal.appendChild(actions);
-
-    document.body.appendChild(modal);
-
-    // Close modal when clicking outside
-    setTimeout(() => {
-        document.addEventListener('click', handleOutsideClick);
-    }, 0);
-
-    function handleOutsideClick(e) {
-        if (!modal.contains(e.target) && !buttonElement.contains(e.target)) {
-            modal.remove();
-            currentFilterModal = null;
-            document.removeEventListener('click', handleOutsideClick);
-        }
-    }
-
-    searchInput.focus();
-}
-
-function getColumnValueCounts(fieldName) {
-    const valueCountMap = new Map();
-    const container = getActiveResultsContainer();
-    if (!container) return valueCountMap;
-    
-    const rows = container.querySelectorAll('tbody tr:not(.detail-row)');
-    
-    rows.forEach(row => {
-        const cell = row.querySelector(`td[data-field="${fieldName}"]`);
-        if (cell) {
-            const value = cell.textContent.trim();
-            valueCountMap.set(value, (valueCountMap.get(value) || 0) + 1);
-        }
-    });
-
-    return valueCountMap;
-}
-
-function toggleFilterValue(fieldName, value) {
-    if (!activeFilters[fieldName]) {
-        // First filter on this column - start with all values except this one
-        const allValues = new Set();
-        const container = getActiveResultsContainer();
-        if (!container) return;
-        
-        const rows = container.querySelectorAll('tbody tr:not(.detail-row)');
-        rows.forEach(row => {
-            const cell = row.querySelector(`td[data-field="${fieldName}"]`);
-            if (cell) {
-                allValues.add(cell.textContent.trim());
-            }
-        });
-        activeFilters[fieldName] = allValues;
-    }
-
-    const fieldFilters = activeFilters[fieldName];
-    if (fieldFilters.has(value)) {
-        fieldFilters.delete(value);
-    } else {
-        fieldFilters.add(value);
-    }
-
-    // If all values are selected, remove the filter
-    const totalValues = getColumnValueCounts(fieldName).size;
-    if (fieldFilters.size === totalValues) {
-        delete activeFilters[fieldName];
-    }
-
-    applyColumnFilters();
-    updateFilterIndicators();
-}
-
-function applyColumnFilters() {
-    const container = getActiveResultsContainer();
-    if (!container) return;
-    
-    const rows = container.querySelectorAll('tbody tr:not(.detail-row)');
-    
-    rows.forEach(row => {
-        let shouldShow = true;
-
-        // Check each active filter
-        for (const [fieldName, allowedValues] of Object.entries(activeFilters)) {
-            if (allowedValues.size === 0) {
-                shouldShow = false;
+    const state2 = getState();
+    tabList.innerHTML = "";
+    state2.tabs.forEach((tab) => {
+      const tabItem = document.createElement("div");
+      tabItem.className = "tab-item";
+      tabItem.dataset.tabId = String(tab.id);
+      if (tab.id === state2.activeTabId) tabItem.classList.add("active");
+      if (tab.isStreaming) tabItem.classList.add("streaming");
+      const tabContent = document.createElement("div");
+      tabContent.className = "tab-content";
+      const tabName = document.createElement("div");
+      tabName.className = "tab-name";
+      tabName.textContent = tab.name;
+      tabName.title = tab.name;
+      const tabInfo = document.createElement("div");
+      tabInfo.className = "tab-info";
+      if (tab.results?.rows) {
+        const total = tab.results.rows.length;
+        if (tab.columnFilters && Object.keys(tab.columnFilters).length) {
+          let visible = 0;
+          tab.results.rows.forEach((r) => {
+            let ok = true;
+            for (const [field, allowed] of Object.entries(tab.columnFilters)) {
+              const val = r.fields.find((f) => f.field === field)?.value || "";
+              if (!allowed.has(val)) {
+                ok = false;
                 break;
+              }
             }
-
-            const cell = row.querySelector(`td[data-field="${fieldName}"]`);
-            if (cell) {
-                const value = cell.textContent.trim();
-                if (!allowedValues.has(value)) {
-                    shouldShow = false;
-                    break;
-                }
-            }
-        }
-
-        if (shouldShow) {
-            row.style.display = '';
+            if (ok) visible++;
+          });
+          tabInfo.textContent = `${visible} of ${total} rows`;
         } else {
-            row.style.display = 'none';
-            // Also hide associated detail row if expanded
-            const detailRow = row.nextElementSibling;
-            if (detailRow && detailRow.classList.contains('detail-row')) {
-                detailRow.style.display = 'none';
-            }
+          tabInfo.textContent = `${total} rows`;
         }
+      } else {
+        tabInfo.textContent = "No data";
+      }
+      tabContent.appendChild(tabName);
+      tabContent.appendChild(tabInfo);
+      const closeBtn = document.createElement("button");
+      closeBtn.className = "tab-close-btn";
+      closeBtn.innerHTML = "\xD7";
+      closeBtn.title = "Close tab";
+      closeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = tab.id;
+        const evt = new CustomEvent("cwlv:close-tab", { detail: { id } });
+        window.dispatchEvent(evt);
+      });
+      tabItem.appendChild(tabContent);
+      tabItem.appendChild(closeBtn);
+      tabItem.addEventListener("click", () => {
+        const evt = new CustomEvent("cwlv:switch-tab", { detail: { id: tab.id } });
+        window.dispatchEvent(evt);
+      });
+      tabList.appendChild(tabItem);
     });
+  }
+  function activateResultsContainer(tabId) {
+    const containers = document.querySelectorAll(".results");
+    containers.forEach((c) => c.classList.remove("active"));
+    const target = document.getElementById(`results-${tabId}`);
+    if (target) target.classList.add("active");
+  }
 
-    // Update the active tab's column filters (deep clone the Sets)
-    const activeTab = getActiveTab();
-    if (activeTab) {
-        activeTab.columnFilters = {};
-        for (const [fieldName, allowedValues] of Object.entries(activeFilters)) {
-            activeTab.columnFilters[fieldName] = new Set(allowedValues);
-        }
+  // src/webview/components/status.ts
+  function setStatus(msg) {
+    const el = document.getElementById("status");
+    if (el) el.textContent = msg;
+  }
+  function pulseLogGroupsAttention() {
+    try {
+      const panel = document.querySelector(".log-groups-panel");
+      if (!panel) return;
+      panel.classList.remove("cwlv-pulse-attention");
+      void panel.offsetWidth;
+      panel.classList.add("cwlv-pulse-attention");
+      setTimeout(() => panel.classList.remove("cwlv-pulse-attention"), 1400);
+    } catch (_) {
     }
+  }
 
-    updateFilteredRowCount();
-    renderTabs(); // Update tab info to show filtered row count
-    
-    // Update status to reflect filtered row count
-    const rowCountText = getRowCountText();
-    if (rowCountText) {
-        const statusText = `✓ Query Complete${rowCountText}`;
-        setStatus(statusText);
-        
-        // Save status to the active tab
-        const activeTab = getActiveTab();
-        if (activeTab) {
-            activeTab.status = statusText;
-        }
+  // src/webview/lib/html.ts
+  function escapeHtml(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+
+  // src/webview/features/search/search.ts
+  var prevSearchTerm = "";
+  var prevHideNonMatching = true;
+  var prevRowCount = 0;
+  var activeSearchToken = 0;
+  var searchDebounceTimer = null;
+  var lastKeyTime = 0;
+  function debugLog(message) {
+    try {
+      send({ type: "debugLog", message });
+    } catch {
     }
-}
-
-function updateFilterIndicators() {
-    const container = getActiveResultsContainer();
-    if (!container) return;
-    
-    const headers = container.querySelectorAll('thead th[data-field]');
-    
-    headers.forEach(th => {
-        const fieldName = th.dataset.field;
-        const filterBtn = th.querySelector('.column-filter-btn');
-        
-        if (filterBtn) {
-            if (activeFilters[fieldName]) {
-                filterBtn.classList.add('active');
-            } else {
-                filterBtn.classList.remove('active');
-            }
-        }
-    });
-}
-
-function updateFilteredRowCount() {
-    // This function is now deprecated as row counts are shown in tabs
-    // Kept for backwards compatibility - renderTabs() handles the count display
-}
-
-function clearAllFilters() {
-    activeFilters = {};
-    applyColumnFilters();
-    updateFilterIndicators();
-}
-
-function loadLogGroups() {
-    const region = document.getElementById('region').value.trim() || 'us-east-2';
-    const prefix = document.getElementById('lgFilter').value.trim();
-    setStatus('Loading log groups...');
-    vscode.postMessage({ type: 'listLogGroups', region, prefix });
-}
-
-function renderLogGroups(groups) {
-    currentLogGroups = groups;
-    const container = document.getElementById('lgList');
-    container.innerHTML = '';
-    if (!groups.length) {
-        container.innerHTML = '<div class="empty-state">No log groups found</div>';
-        setStatus('');
-        updateSelectedCount();
-        return;
+  }
+  function getActiveTab2() {
+    const s = getState();
+    if (s.activeTabId == null) return null;
+    return s.tabs.find((t) => t.id === s.activeTabId) || null;
+  }
+  function invalidateRowCache() {
+    const s = getState();
+    if (s.activeTabId == null) return;
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (tab) {
+      tab.rowCache = void 0;
+      tab.previousMatchedRowIndices = void 0;
+      tab.searchMatches = void 0;
     }
-    const region = document.getElementById('region').value.trim() || 'us-east-2';
-    groups.forEach(g => {
-        const isFav = currentFavorites.some(f => f.name === g && f.region === region);
-        const isSelected = isLogGroupSelected(g, region);
-
-        const wrapper = document.createElement('div');
-        wrapper.className = 'lg-item';
-        wrapper.dataset.name = g;
-        wrapper.dataset.region = region;
-        if (isSelected) {
-            wrapper.classList.add('selected');
-        }
-
-        const btn = document.createElement('button');
-        btn.className = 'lg-btn';
-        btn.title = isSelected ? 'Click to deselect' : 'Click to select';
-        btn.addEventListener('click', () => {
-            const currentlySelected = wrapper.classList.contains('selected');
-            if (currentlySelected) {
-                wrapper.classList.remove('selected');
-            } else {
-                wrapper.classList.add('selected');
-            }
-            updateSelectedCount();
-            updateFavoritesCheckboxes();
-        });
-
-        // Checkmark indicator
-        const checkmark = document.createElement('span');
-        checkmark.className = 'lg-checkmark';
-        checkmark.textContent = '✓';
-
-        // Text content
-        const text = document.createElement('span');
-        text.className = 'lg-text';
-        text.textContent = g;
-
-        btn.appendChild(checkmark);
-        btn.appendChild(text);
-
-        const starBtn = document.createElement('button');
-        starBtn.className = 'star-btn' + (isFav ? ' active' : '');
-        starBtn.textContent = isFav ? '★' : '☆';
-        starBtn.title = isFav ? 'Remove from favorites' : 'Add to favorites';
-        starBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleFavorite(g, region);
-        });
-
-        wrapper.appendChild(btn);
-        wrapper.appendChild(starBtn);
-        container.appendChild(wrapper);
-    });
-    setStatus('');
-    updateSelectedCount();
-    updateFavoritesCheckboxes();
-}
-
-function filterLogGroups() {
-    const filter = document.getElementById('lgFilter').value.trim().toLowerCase();
-    const items = document.querySelectorAll('.lg-item');
-    items.forEach(item => {
-        const name = item.dataset.name.toLowerCase();
-        item.style.display = name.includes(filter) ? 'flex' : 'none';
-    });
-}
-
-function updateStarButtons() {
-    const region = document.getElementById('region').value.trim() || 'us-east-2';
-    const items = document.querySelectorAll('.lg-item');
-    items.forEach(item => {
-        const name = item.dataset.name;
-        const starBtn = item.querySelector('.star-btn');
-        if (starBtn && name) {
-            const isFav = currentFavorites.some(f => f.name === name && f.region === region);
-            starBtn.textContent = isFav ? '★' : '☆';
-            starBtn.title = isFav ? 'Remove from favorites' : 'Add to favorites';
-            if (isFav) {
-                starBtn.classList.add('active');
-            } else {
-                starBtn.classList.remove('active');
-            }
-        }
-    });
-}
-
-function toggleFavorite(name, region) {
-    const isFav = currentFavorites.some(f => f.name === name && f.region === region);
-    if (isFav) {
-        vscode.postMessage({ type: 'removeFavorite', name, region });
-    } else {
-        vscode.postMessage({ type: 'addFavorite', data: { name, region } });
-    }
-}
-
-function renderFavorites(favs) {
-    currentFavorites = favs;
-    const container = document.getElementById('favList');
-    container.innerHTML = '';
-    document.getElementById('favCount').textContent = favs.length;
-
-    if (!favs.length) {
-        container.innerHTML = '<div class="empty-state">No favorites yet. Click ★ next to a log group.</div>';
-        return;
-    }
-
-    favs.forEach(f => {
-        const isSelected = isLogGroupSelected(f.name, f.region);
-
-        const wrapper = document.createElement('div');
-        wrapper.className = 'fav-item';
-        wrapper.dataset.name = f.name;
-        wrapper.dataset.region = f.region;
-        if (isSelected) {
-            wrapper.classList.add('selected');
-        }
-
-        const btn = document.createElement('button');
-        btn.className = 'fav-btn';
-        btn.title = isSelected ? 'Click to deselect' : 'Click to select';
-        btn.addEventListener('click', () => {
-            // Get current state dynamically instead of using captured value
-            const currentlySelected = isLogGroupSelected(f.name, f.region);
-            toggleFavoriteSelection(f, !currentlySelected);
-        });
-
-        // Checkmark indicator
-        const checkmark = document.createElement('span');
-        checkmark.className = 'fav-checkmark';
-        checkmark.textContent = '✓';
-
-        // Text content
-        const text = document.createElement('span');
-        text.className = 'fav-text';
-        text.textContent = `${f.name} (${f.region})`;
-
-        btn.appendChild(checkmark);
-        btn.appendChild(text);
-
-        wrapper.appendChild(btn);
-        container.appendChild(wrapper);
-    });
-}
-
-function selectFavorite(fav) {
-    document.getElementById('region').value = fav.region;
-    loadLogGroups();
-    setTimeout(() => {
-        const items = document.querySelectorAll('.lg-item');
-        items.forEach(item => {
-            const cb = item.querySelector('input[type=checkbox]');
-            if (cb.dataset.name === fav.name) {
-                cb.checked = true;
-                item.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-        });
-    }, 500);
-}
-
-function saveCurrentQuery() {
-    const query = getQueryText();
-    const logGroups = getSelectedLogGroups();
-
-    // Auto-generate name from timestamp
-    const now = new Date();
-    const name = `Query ${now.toISOString().slice(0, 19).replace('T', ' ')}`;
-
-    let existingId = undefined;
-    const selectIdx = parseInt(document.getElementById('savedSelect').value, 10);
-    if (!isNaN(selectIdx) && savedQueries[selectIdx]) {
-        existingId = savedQueries[selectIdx].id; // update existing
-    }
-    vscode.postMessage({ type: 'saveQuery', data: { id: existingId || Date.now().toString(), name, query, logGroups } });
-}
-
-function renderSavedQueries(list, source, error) {
-    savedQueries = list;
-    if (source) savedQueriesSource = source;
-    const select = document.getElementById('savedSelect');
-    const header = source === 'aws' ? '-- Saved Queries --' : '-- Load Local Saved Query --';
-    select.innerHTML = `<option value="">${header}</option>`;
-    list.forEach((item, idx) => {
-        const opt = document.createElement('option');
-        opt.value = idx;
-        opt.textContent = item.name;
-        select.appendChild(opt);
-    });
-    if (error) {
-        setStatus(`⚠ Saved queries fallback (${error})`);
-    }
-}
-
-function loadSavedQuery() {
-    const idx = parseInt(document.getElementById('savedSelect').value, 10);
-    if (isNaN(idx)) return;
-    const query = savedQueries[idx];
-    if (query) {
-        setQueryText(query.query);
-        // Optionally select log groups if they match
-    }
-}
-
-function deleteSelectedSaved() {
-    const idx = parseInt(document.getElementById('savedSelect').value, 10);
-    if (isNaN(idx)) return;
-    const query = savedQueries[idx];
-    if (query && confirm(`Delete saved query "${query.name}"?`)) {
-        vscode.postMessage({ type: 'deleteQuery', id: query.id });
-    }
-}
-
-let currentSearchMatchIndex = -1;
-let searchMatches = [];
-let prevSearchTerm = '';
-let prevHideNonMatching = true;
-let prevRowCount = 0;
-let activeSearchToken = 0; // cancellation token increment
-let spinnerEl = null;
-// Row cache to avoid repeatedly traversing the DOM structure for every search run.
-// Each cache entry: { rowEl, cells: [{ el, original, lower }...], combinedLower }
-let rowCache = null;
-// Also reset previous narrowing state whenever cache invalidated
-function resetSearchState() {
-    previousMatchedRowIndices = null;
-    prevSearchTerm = '';
-}
-function invalidateRowCache() { rowCache = null; resetSearchState(); }
-function buildRowCache() {
-    if (rowCache) return rowCache;
-    const container = getActiveResultsContainer();
+    prevSearchTerm = "";
+  }
+  function buildRowCache() {
+    const s = getState();
+    if (s.activeTabId == null) return [];
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab) return [];
+    if (tab.rowCache) return tab.rowCache;
+    const container = document.getElementById(`results-${s.activeTabId}`);
     if (!container) return [];
-    
-    const rows = container.querySelectorAll('tbody tr');
-    rowCache = Array.from(rows)
-        .filter(row => !row.classList.contains('detail-row')) // exclude expanded JSON detail rows from search indexing
-        .map(row => {
-        const cells = Array.from(row.querySelectorAll('td')).map(td => {
-            const original = td.dataset.originalText || td.textContent || '';
-            if (!td.dataset.originalText) td.dataset.originalText = original; // persist for restore
-            return { el: td, original, lower: original.toLowerCase() };
-        });
-        // Pre-concatenate row lowercase string for fast exclusion test
-        const combinedLower = cells.map(c => c.lower).join('\u0001'); // unlikely separator
-        return { rowEl: row, cells, combinedLower, lastMatched: false };
+    const rows = Array.from(container.querySelectorAll("tbody tr"));
+    const cache = rows.filter((r) => !r.classList.contains("detail-row")).map((r) => {
+      const tdEls = Array.from(r.querySelectorAll("td"));
+      const filteredTdEls = tdEls.filter((td) => !td.classList.contains("expand-cell"));
+      const cells = filteredTdEls.map((td) => {
+        const original = td.dataset.originalText || td.textContent || "";
+        if (!td.dataset.originalText) td.dataset.originalText = original;
+        return { el: td, original, lower: original.toLowerCase() };
+      });
+      const combinedLower = cells.map((c) => c.lower).join("");
+      return { rowEl: r, cells, combinedLower, lastMatched: true };
     });
-    prevRowCount = rowCache.length; // sync row count baseline
-    return rowCache;
-}
-function ensureSpinnerRef() {
-    if (!spinnerEl) spinnerEl = document.getElementById('searchSpinner');
-    return spinnerEl;
-}
-function setSearchBusy(busy) {
-    const el = ensureSpinnerRef();
+    tab.rowCache = cache;
+    prevRowCount = cache.length;
+    return cache;
+  }
+  function ensureSpinner() {
+    return document.getElementById("searchSpinner");
+  }
+  function setSearchBusy(busy) {
+    const el = ensureSpinner();
     if (!el) return;
-    if (busy) el.classList.add('active'); else el.classList.remove('active');
-}
-
-let previousMatchedRowIndices = null; // null means unknown (full scan required)
-function searchResults(preservePosition = false, force = false) {
-    const DEBUG_SEARCH = true; // toggle instrumentation
-    const perf = (typeof performance !== 'undefined' ? performance : { now: () => Date.now() });
+    if (busy) el.classList.add("active");
+    else el.classList.remove("active");
+  }
+  function computeSearchDelay() {
+    const input = document.getElementById("searchInput");
+    const term = input?.value.trim() || "";
+    const len = term.length;
+    const s = getState();
+    const tab = s.activeTabId != null ? s.tabs.find((t) => t.id === s.activeTabId) : null;
+    const cacheLen = tab?.rowCache ? tab.rowCache.length : 0;
+    const rowFactor = Math.min(300, cacheLen / 50);
+    const now = Date.now();
+    const typingFast = now - lastKeyTime < 150;
+    lastKeyTime = now;
+    if (len === 0) return 0;
+    if (len < 3) return 200 + rowFactor;
+    if (typingFast) return 140 + rowFactor / 2;
+    return 60 + rowFactor / 3;
+  }
+  function clearSearch() {
+    const input = document.getElementById("searchInput");
+    if (input) input.value = "";
+    searchResults();
+  }
+  function navigateSearchNext() {
+    const s = getState();
+    if (s.activeTabId == null) return;
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab || !tab.searchMatches || !tab.searchMatches.length) return;
+    tab.searchIndex = (tab.searchIndex + 1) % tab.searchMatches.length;
+    highlightCurrentMatch();
+  }
+  function navigateSearchPrev() {
+    const s = getState();
+    if (s.activeTabId == null) return;
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab || !tab.searchMatches || !tab.searchMatches.length) return;
+    tab.searchIndex = (tab.searchIndex - 1 + tab.searchMatches.length) % tab.searchMatches.length;
+    highlightCurrentMatch();
+  }
+  function toggleHideNonMatching() {
+    const hide = document.getElementById("searchHideNonMatching")?.checked || false;
+    const tab = getActiveTab2();
+    if (!tab?.rowCache || !prevSearchTerm) {
+      searchResults(false, true);
+      return;
+    }
+    let activeMatchRow = null;
+    if (tab.searchIndex >= 0 && tab.searchMatches?.[tab.searchIndex]) {
+      activeMatchRow = tab.searchMatches[tab.searchIndex].row;
+    }
+    tab.rowCache.forEach((entry) => {
+      const shouldHide = hide && !entry.lastMatched;
+      entry.rowEl.classList.toggle("row-hidden", shouldHide);
+      if (shouldHide) collapseDetailIfPresent(entry.rowEl);
+    });
+    if (activeMatchRow && activeMatchRow.classList.contains("row-hidden")) activeMatchRow.classList.remove("row-hidden");
+    if (activeMatchRow) requestAnimationFrame(() => {
+      try {
+        activeMatchRow.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch {
+      }
+    });
+  }
+  function collapseDetailIfPresent(row) {
+    const next = row.nextElementSibling;
+    if (next && next.classList.contains("detail-row")) next.remove();
+  }
+  function highlightCurrentMatch() {
+    document.querySelectorAll("mark.search-highlight").forEach((m) => m.classList.remove("current-match"));
+    const s = getState();
+    const tab = s.activeTabId != null ? s.tabs.find((t) => t.id === s.activeTabId) : null;
+    if (!tab || !tab.searchMatches || tab.searchMatches.length === 0 || tab.searchIndex < 0) return;
+    const match = tab.searchMatches[tab.searchIndex];
+    match.mark.classList.add("current-match");
+    match.mark.scrollIntoView({ behavior: "smooth", block: "center" });
+    const statusText = `\u{1F50D} Match ${tab.searchIndex + 1}/${tab.searchMatches.length}`;
+    setStatus(statusText);
+    updateTab(s, s.activeTabId, { status: statusText });
+  }
+  function searchResults(preservePosition = false, force = false, restoreIndex) {
+    const perf = typeof performance !== "undefined" ? performance : { now: () => Date.now() };
     const t0 = perf.now();
-    const termRaw = document.getElementById('searchInput').value.trim();
-    const term = termRaw; // keep original for highlighting
+    const input = document.getElementById("searchInput");
+    const termRaw = input?.value.trim() || "";
+    const term = termRaw;
     const lowerTerm = term.toLowerCase();
-    const hideNonMatching = document.getElementById('searchHideNonMatching').checked;
+    const hideNonMatching = document.getElementById("searchHideNonMatching")?.checked || false;
+    console.log("[search] searchResults called:", { term, force, preservePosition, restoreIndex, inputElement: input });
     const cacheBuildStart = perf.now();
-    const existingCacheRef = rowCache; // track if reused
+    const s2 = getState();
+    const tab2 = s2.activeTabId != null ? s2.tabs.find((t) => t.id === s2.activeTabId) : null;
+    const existingCacheRef = tab2?.rowCache;
     const cache = buildRowCache();
     const cacheBuildMs = perf.now() - cacheBuildStart;
-
-    // Fast path: if nothing relevant changed and not forced, bail.
+    console.log("[search] cache built:", { cacheLength: cache.length, term, prevSearchTerm });
     if (!force && term === prevSearchTerm && hideNonMatching === prevHideNonMatching && cache.length === prevRowCount) {
-        return;
+      console.log("[search] skipping - no changes");
+      return;
     }
     const termChanged = term !== prevSearchTerm;
-    const narrowing = termChanged && term.startsWith(prevSearchTerm) && prevSearchTerm.length > 0; // user added characters
+    const narrowing = termChanged && term.startsWith(prevSearchTerm) && prevSearchTerm.length > 0;
     prevHideNonMatching = hideNonMatching;
     prevRowCount = cache.length;
-
-    const savedIndex = preservePosition ? currentSearchMatchIndex : -1; // reserved for future use
-    searchMatches = [];
-    currentSearchMatchIndex = -1;
+    const currentTabIndex = tab2?.searchIndex ?? -1;
+    const savedIndex = restoreIndex !== void 0 ? restoreIndex : preservePosition ? currentTabIndex : -1;
     const token = ++activeSearchToken;
-
-    // Remove all previous highlights if term changed (ensures no stale marks linger)
     if (termChanged) {
-        document.querySelectorAll('mark.search-highlight').forEach(mark => {
-            const cell = mark.parentElement;
-            if (!cell) return;
-            // Restore original text from dataset if available
-            const td = cell.closest('td');
-            if (td && td.dataset.originalText) {
-                td.textContent = td.dataset.originalText;
-            }
-        });
+      document.querySelectorAll("mark.search-highlight").forEach((mark) => {
+        const cell = mark.parentElement?.closest("td");
+        if (cell && cell instanceof HTMLTableCellElement && cell.dataset.originalText) cell.textContent = cell.dataset.originalText;
+      });
     }
-
-    // If term empty -> fast restore without heavy loops
     if (!term) {
-        cache.forEach(entry => {
-            entry.rowEl.classList.remove('row-hidden');
-            entry.cells.forEach(c => { if (c.el.textContent !== c.original) c.el.textContent = c.original; });
-            entry.lastMatched = true; // everyone considered matched when no term
+      cache.forEach((entry) => {
+        entry.rowEl.classList.remove("row-hidden");
+        entry.cells.forEach((c) => {
+          if (c.el.textContent !== c.original) c.el.textContent = c.original;
         });
-        searchMatches = [];
-        currentSearchMatchIndex = -1;
-        setStatus('');
-        setSearchBusy(false);
-        prevSearchTerm = term; // update after processing
-        previousMatchedRowIndices = null;
-        return;
+        entry.lastMatched = true;
+      });
+      setStatus("");
+      setSearchBusy(false);
+      prevSearchTerm = term;
+      const s3 = getState();
+      const tab3 = s3.activeTabId != null ? s3.tabs.find((t) => t.id === s3.activeTabId) : null;
+      if (tab3) {
+        tab3.previousMatchedRowIndices = void 0;
+        tab3.searchMatches = [];
+        updateTab(s3, s3.activeTabId, { searchIndex: -1 });
+      }
+      return;
     }
-
     setSearchBusy(true);
-    setStatus('🔍 Searching...');
-
-    // Prepare regex once
-    let regex = null;
-    try { regex = new RegExp(`(${escapeRegex(term)})`, 'gi'); } catch (e) { /* invalid regex via user? treat as plain text */ regex = null; }
-
-    // Decide scan set: if narrowing, only previously matched rows; else full set
+    setStatus("\u{1F50D} Searching...");
     let scanIndices;
-    if (!term || !previousMatchedRowIndices || !narrowing) {
-        scanIndices = cache.map((_, i) => i);
-    } else {
-        scanIndices = previousMatchedRowIndices;
-    }
-    // Reset matched indices collection before processing
+    const s4 = getState();
+    const tab4 = s4.activeTabId != null ? s4.tabs.find((t) => t.id === s4.activeTabId) : null;
+    const previousMatchedRowIndices = tab4?.previousMatchedRowIndices;
+    if (!term || !previousMatchedRowIndices || !narrowing) scanIndices = cache.map((_, i) => i);
+    else scanIndices = previousMatchedRowIndices;
     const newMatched = [];
     let matchedRowCount = 0;
     let highlightCells = 0;
@@ -2440,476 +495,1993 @@ function searchResults(preservePosition = false, force = false) {
     const scanStart = perf.now();
     let processed = 0;
     let cpuTimeMs = 0;
-    let timeBudgetMs = 10; // initial budget
+    let timeBudgetMs = 10;
     const escalationCheckCount = Math.min(400, scanIndices.length);
     function processSlice() {
-        if (token !== activeSearchToken) return;
-        const sliceStartWall = perf.now();
-        let sliceCpuStart = sliceStartWall;
-        while (processed < scanIndices.length) {
-            const i = scanIndices[processed];
-            processed++;
-            const entry = cache[i];
-            const { rowEl, cells, combinedLower } = entry;
-            if (!combinedLower.includes(lowerTerm)) {
-                if (hideNonMatching) rowEl.classList.add('row-hidden'); else rowEl.classList.remove('row-hidden');
-                if (hideNonMatching && rowEl.classList.contains('row-hidden')) collapseRowDetail(rowEl); // ensure detail collapses when hidden
-                entry.cells.forEach(c => { if (c.el.querySelector && c.el.querySelector('mark.search-highlight')) c.el.textContent = c.original; });
-                entry.lastMatched = false;
-            } else {
-                matchedRowCount++;
-                newMatched.push(i);
-                rowEl.classList.remove('row-hidden');
-                entry.lastMatched = true;
-                for (const cell of cells) {
-                    if (!cell.lower.includes(lowerTerm)) continue;
-                    const hStart = perf.now();
-                    const original = cell.original;
-                    const lowerOriginal = cell.lower;
-                    let resultHtml = '';
-                    let startIdx = 0;
-                    let searchIdx;
-                    while ((searchIdx = lowerOriginal.indexOf(lowerTerm, startIdx)) !== -1) {
-                        const segment = original.slice(startIdx, searchIdx);
-                        resultHtml += escapeHtml(segment) + `<mark class=\"search-highlight\">${escapeHtml(original.slice(searchIdx, searchIdx + term.length))}</mark>`;
-                        startIdx = searchIdx + term.length;
-                    }
-                    resultHtml += escapeHtml(original.slice(startIdx));
-                    cell.el.innerHTML = resultHtml;
-                    highlightCells++;
-                    highlightTimeMs += (perf.now() - hStart);
-                }
-            }
-            // Escalate budget if we observe very high match ratio early (avoid long wall time for broad terms)
-            if (processed === escalationCheckCount) {
-                const ratio = matchedRowCount / processed;
-                if (ratio > 0.5) timeBudgetMs = 22; else if (ratio > 0.2) timeBudgetMs = 16;
-            }
-            if ((perf.now() - sliceStartWall) >= timeBudgetMs) break; // yield
-        }
-        cpuTimeMs += (perf.now() - sliceCpuStart);
-        if (processed < scanIndices.length) {
-            // Use setTimeout(0) to yield; requestIdleCallback stretches total wall time too much in this scenario
-            setTimeout(processSlice, 0);
+      if (token !== activeSearchToken) return;
+      const sliceStartWall = perf.now();
+      let sliceCpuStart = sliceStartWall;
+      while (processed < scanIndices.length) {
+        const i = scanIndices[processed++];
+        const entry = cache[i];
+        const { rowEl, cells, combinedLower } = entry;
+        if (!combinedLower.includes(lowerTerm)) {
+          rowEl.classList.toggle("row-hidden", hideNonMatching);
+          if (hideNonMatching && rowEl.classList.contains("row-hidden")) collapseDetailIfPresent(rowEl);
+          cells.forEach((c) => {
+            if (c.el.querySelector && c.el.querySelector("mark.search-highlight")) c.el.textContent = c.original;
+          });
+          entry.lastMatched = false;
         } else {
-            if (token !== activeSearchToken) return;
-            document.querySelectorAll('mark.search-highlight').forEach(mark => {
-                const row = mark.closest('tr');
-                if (row) searchMatches.push({ row, mark });
-            });
-            if (searchMatches.length) {
-                currentSearchMatchIndex = 0;
-                highlightCurrentMatch();
+          matchedRowCount++;
+          newMatched.push(i);
+          rowEl.classList.remove("row-hidden");
+          entry.lastMatched = true;
+          for (const cell of cells) {
+            if (!cell.lower.includes(lowerTerm)) continue;
+            const hStart = perf.now();
+            const original = cell.original;
+            const lowerOriginal = cell.lower;
+            let resultHtml = "";
+            let startIdx = 0;
+            let searchIdx;
+            while ((searchIdx = lowerOriginal.indexOf(lowerTerm, startIdx)) !== -1) {
+              resultHtml += escapeHtml(original.slice(startIdx, searchIdx)) + `<mark class="search-highlight">${escapeHtml(original.slice(searchIdx, searchIdx + term.length))}</mark>`;
+              startIdx = searchIdx + term.length;
             }
-            const statusText = `🔍 ${searchMatches.length} matches in ${matchedRowCount} rows`;
-            setStatus(statusText);
-            
-            // Save search status to the active tab
-            const activeTab = getActiveTab();
-            if (activeTab) {
-                activeTab.status = statusText;
-            }
-            
-            setSearchBusy(false);
-            previousMatchedRowIndices = newMatched;
-            const tEnd = perf.now();
-            const wallScanMs = tEnd - scanStart;
-            const totalMs = tEnd - t0;
-            debugLog(`[search] term=\"${term}\" rows=${cache.length} scanned=${scanIndices.length} matchedRows=${matchedRowCount} matches=${searchMatches.length} highlightCells=${highlightCells} cacheReused=${existingCacheRef? 'yes':'no'} cacheBuildMs=${cacheBuildMs.toFixed(1)} wallScanMs=${wallScanMs.toFixed(1)} cpuScanMs=${cpuTimeMs.toFixed(1)} highlightMs=${highlightTimeMs.toFixed(1)} totalMs=${totalMs.toFixed(1)} budget=${timeBudgetMs}`);
+            resultHtml += escapeHtml(original.slice(startIdx));
+            cell.el.innerHTML = resultHtml;
+            highlightCells++;
+            highlightTimeMs += perf.now() - hStart;
+          }
         }
+        if (processed === escalationCheckCount) {
+          const ratio = matchedRowCount / processed;
+          if (ratio > 0.5) timeBudgetMs = 22;
+          else if (ratio > 0.2) timeBudgetMs = 16;
+        }
+        if (perf.now() - sliceStartWall >= timeBudgetMs) break;
+      }
+      cpuTimeMs += perf.now() - sliceCpuStart;
+      if (processed < scanIndices.length) setTimeout(processSlice, 0);
+      else {
+        if (token !== activeSearchToken) return;
+        const newSearchMatches = [];
+        document.querySelectorAll("mark.search-highlight").forEach((mark) => {
+          const row = mark.closest("tr");
+          if (row) newSearchMatches.push({ row, mark });
+        });
+        const s5 = getState();
+        const tab5 = s5.activeTabId != null ? s5.tabs.find((t) => t.id === s5.activeTabId) : null;
+        if (tab5) {
+          tab5.searchMatches = newSearchMatches;
+          tab5.previousMatchedRowIndices = newMatched;
+          if (newSearchMatches.length) {
+            const newIndex = savedIndex >= 0 && savedIndex < newSearchMatches.length ? savedIndex : 0;
+            updateTab(s5, s5.activeTabId, { searchIndex: newIndex });
+            highlightCurrentMatch();
+          } else {
+            updateTab(s5, s5.activeTabId, { searchIndex: -1 });
+          }
+          const statusText = `\u{1F50D} ${newSearchMatches.length} matches in ${matchedRowCount} rows`;
+          setStatus(statusText);
+          updateTab(s5, s5.activeTabId, { status: statusText });
+        }
+        setSearchBusy(false);
+        const tEnd = perf.now();
+        const wallScanMs = tEnd - scanStart;
+        const totalMs = tEnd - t0;
+        debugLog(`[search] term="${term}" rows=${cache.length} scanned=${scanIndices.length} matchedRows=${matchedRowCount} matches=${newSearchMatches.length} highlightCells=${highlightCells} cacheReused=${existingCacheRef ? "yes" : "no"} cacheBuildMs=${cacheBuildMs.toFixed(1)} wallScanMs=${wallScanMs.toFixed(1)} cpuScanMs=${cpuTimeMs.toFixed(1)} highlightMs=${highlightTimeMs.toFixed(1)} totalMs=${totalMs.toFixed(1)} budget=${timeBudgetMs}`);
+        prevSearchTerm = term;
+      }
     }
     processSlice();
-    prevSearchTerm = term; // commit term after scheduling batches
-}
+    prevSearchTerm = term;
+  }
+  function scheduleSearchRerun() {
+    const input = document.getElementById("searchInput");
+    if (input && input.value.trim()) setTimeout(() => searchResults(false, true), 0);
+  }
+  function initSearchEvents() {
+    const input = document.getElementById("searchInput");
+    console.log("[search] initSearchEvents - input element:", input);
+    if (input && !input.hasAttribute("data-search-bound")) {
+      input.setAttribute("data-search-bound", "true");
+      input.addEventListener("input", () => {
+        console.log("[search] input event fired, value:", input.value);
+        if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+        const delay = computeSearchDelay();
+        searchDebounceTimer = setTimeout(() => searchResults(), delay);
+      });
+    }
+    const clearBtn = document.getElementById("searchClearBtn");
+    if (clearBtn && !clearBtn.hasAttribute("data-search-bound")) {
+      clearBtn.setAttribute("data-search-bound", "true");
+      clearBtn.addEventListener("click", clearSearch);
+    }
+    const prevBtn = document.getElementById("searchPrevBtn");
+    if (prevBtn && !prevBtn.hasAttribute("data-search-bound")) {
+      prevBtn.setAttribute("data-search-bound", "true");
+      prevBtn.addEventListener("click", navigateSearchPrev);
+    }
+    const nextBtn = document.getElementById("searchNextBtn");
+    if (nextBtn && !nextBtn.hasAttribute("data-search-bound")) {
+      nextBtn.setAttribute("data-search-bound", "true");
+      nextBtn.addEventListener("click", navigateSearchNext);
+    }
+    const hideChk = document.getElementById("searchHideNonMatching");
+    if (hideChk && !hideChk.hasAttribute("data-search-bound")) {
+      hideChk.setAttribute("data-search-bound", "true");
+      hideChk.addEventListener("change", toggleHideNonMatching);
+    }
+  }
 
-// Lightweight toggle to avoid re-searching when only the hide/show preference changes
-function toggleHideNonMatching() {
-    const hide = document.getElementById('searchHideNonMatching').checked;
-    // If no active term or no cache yet, fallback to full search (ensures correctness)
-    if (!rowCache || !prevSearchTerm) {
-        searchResults(false, true);
+  // src/webview/features/results/filters.ts
+  var activeFilters = {};
+  var currentFilterModal = null;
+  function getActiveResultsContainer() {
+    const s = getState();
+    if (s.activeTabId == null) return null;
+    return document.getElementById(`results-${s.activeTabId}`);
+  }
+  function clearAllFilters() {
+    activeFilters = {};
+    applyColumnFilters();
+    updateFilterIndicators();
+  }
+  function collapseDetailIfHidden(row) {
+    const detailRow = row.nextElementSibling;
+    if (detailRow && detailRow.classList.contains("detail-row")) detailRow.classList.add("row-hidden");
+  }
+  function getColumnValueCounts(fieldName) {
+    const valueCountMap = /* @__PURE__ */ new Map();
+    const container = getActiveResultsContainer();
+    if (!container) return valueCountMap;
+    const rows = Array.from(container.querySelectorAll("tbody tr:not(.detail-row)"));
+    rows.forEach((row) => {
+      const cell = row.querySelector(`td[data-field="${fieldName}"]`);
+      if (cell) {
+        const value = (cell.textContent || "").trim();
+        valueCountMap.set(value, (valueCountMap.get(value) || 0) + 1);
+      }
+    });
+    return valueCountMap;
+  }
+  function showColumnFilter(fieldName, buttonElement) {
+    if (currentFilterModal) {
+      currentFilterModal.remove();
+      currentFilterModal = null;
+      return;
+    }
+    const valueCountMap = getColumnValueCounts(fieldName);
+    const sortedValues = Array.from(valueCountMap.entries()).sort((a, b) => b[1] - a[1]);
+    const modal = document.createElement("div");
+    modal.className = "column-filter-modal";
+    currentFilterModal = modal;
+    const rect = buttonElement.getBoundingClientRect();
+    modal.style.position = "fixed";
+    modal.style.top = `${rect.bottom + 5}px`;
+    modal.style.left = `${rect.left - 150}px`;
+    const header = document.createElement("div");
+    header.className = "filter-modal-header";
+    header.textContent = `Filter: ${fieldName}`;
+    modal.appendChild(header);
+    const searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.className = "filter-search-input";
+    searchInput.placeholder = "Search values...";
+    modal.appendChild(searchInput);
+    const valuesList = document.createElement("div");
+    valuesList.className = "filter-values-list";
+    function renderValuesList(filterText = "") {
+      valuesList.innerHTML = "";
+      const lower = filterText.toLowerCase();
+      const filtered = sortedValues.filter(([value]) => value.toLowerCase().includes(lower));
+      if (!filtered.length) {
+        const empty = document.createElement("div");
+        empty.className = "filter-value-empty";
+        empty.textContent = "No matching values";
+        valuesList.appendChild(empty);
         return;
+      }
+      filtered.forEach(([value, count]) => {
+        const item = document.createElement("div");
+        item.className = "filter-value-item";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.id = `filter-${fieldName}-${value}`;
+        const fieldFilters = activeFilters[fieldName];
+        checkbox.checked = !fieldFilters || fieldFilters.has(value);
+        checkbox.addEventListener("change", () => toggleFilterValue(fieldName, value));
+        const label = document.createElement("label");
+        label.htmlFor = checkbox.id;
+        label.className = "filter-value-label";
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "filter-value-text";
+        valueSpan.textContent = value || "(empty)";
+        const countSpan = document.createElement("span");
+        countSpan.className = "filter-value-count";
+        countSpan.textContent = String(count);
+        label.appendChild(valueSpan);
+        label.appendChild(countSpan);
+        item.appendChild(checkbox);
+        item.appendChild(label);
+        valuesList.appendChild(item);
+      });
     }
-    // Capture the currently focused match element (if any)
-    let activeMatchEl = null;
-    if (currentSearchMatchIndex >= 0 && searchMatches[currentSearchMatchIndex]) {
-        activeMatchEl = searchMatches[currentSearchMatchIndex].mark.closest('tr');
-    }
-    rowCache.forEach(entry => {
-        const shouldHide = hide && !entry.lastMatched;
-        if (shouldHide) entry.rowEl.classList.add('row-hidden'); else entry.rowEl.classList.remove('row-hidden');
-        if (shouldHide) collapseRowDetail(entry.rowEl);
+    renderValuesList();
+    searchInput.addEventListener("input", (e) => renderValuesList(e.target.value));
+    modal.appendChild(valuesList);
+    const actions = document.createElement("div");
+    actions.className = "filter-modal-actions";
+    const selectAllBtn = document.createElement("button");
+    selectAllBtn.textContent = "Select All";
+    selectAllBtn.className = "filter-action-btn";
+    selectAllBtn.addEventListener("click", () => {
+      delete activeFilters[fieldName];
+      renderValuesList(searchInput.value);
+      applyColumnFilters();
+      updateFilterIndicators();
     });
-    // After applying visibility changes, if the active match row was hidden (shouldn't be if lastMatched), ensure it's shown and scrolled
-    if (activeMatchEl && activeMatchEl.classList.contains('row-hidden')) {
-        activeMatchEl.classList.remove('row-hidden');
-    }
-    if (activeMatchEl) {
-        // Use requestAnimationFrame to let layout settle before scrolling
-        requestAnimationFrame(() => {
-            try { activeMatchEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) { /* ignore */ }
-        });
-    }
-}
-
-function escapeRegex(str) {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function highlightCurrentMatch() {
-    // Remove previous current-match highlighting
-    document.querySelectorAll('mark.search-highlight').forEach(mark => {
-        mark.classList.remove('current-match');
+    const clearBtn = document.createElement("button");
+    clearBtn.textContent = "Clear";
+    clearBtn.className = "filter-action-btn";
+    clearBtn.addEventListener("click", () => {
+      activeFilters[fieldName] = /* @__PURE__ */ new Set();
+      renderValuesList(searchInput.value);
+      applyColumnFilters();
+      updateFilterIndicators();
     });
-
-    if (searchMatches.length === 0 || currentSearchMatchIndex < 0) return;
-
-    const match = searchMatches[currentSearchMatchIndex];
-    match.mark.classList.add('current-match');
-    match.mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-    const statusText = `🔍 Match ${currentSearchMatchIndex + 1}/${searchMatches.length}`;
-    setStatus(statusText);
-    
-    // Save search navigation status to the active tab
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "Close";
+    closeBtn.className = "filter-action-btn filter-close-btn";
+    closeBtn.addEventListener("click", () => {
+      modal.remove();
+      currentFilterModal = null;
+    });
+    actions.appendChild(selectAllBtn);
+    actions.appendChild(clearBtn);
+    actions.appendChild(closeBtn);
+    modal.appendChild(actions);
+    document.body.appendChild(modal);
+    setTimeout(() => {
+      document.addEventListener("click", handleOutsideClick);
+    }, 0);
+    function handleOutsideClick(e) {
+      if (!modal.contains(e.target) && !buttonElement.contains(e.target)) {
+        modal.remove();
+        currentFilterModal = null;
+        document.removeEventListener("click", handleOutsideClick);
+      }
+    }
+    searchInput.focus();
+  }
+  function toggleFilterValue(fieldName, value) {
+    if (!activeFilters[fieldName]) {
+      const allValues = /* @__PURE__ */ new Set();
+      const container = getActiveResultsContainer();
+      if (!container) return;
+      const rows = Array.from(container.querySelectorAll("tbody tr:not(.detail-row)"));
+      rows.forEach((row) => {
+        const cell = row.querySelector(`td[data-field="${fieldName}"]`);
+        if (cell) allValues.add((cell.textContent || "").trim());
+      });
+      activeFilters[fieldName] = allValues;
+    }
+    const fieldFilters = activeFilters[fieldName];
+    if (fieldFilters.has(value)) fieldFilters.delete(value);
+    else fieldFilters.add(value);
+    const totalValues = getColumnValueCounts(fieldName).size;
+    if (fieldFilters.size === totalValues) delete activeFilters[fieldName];
+    applyColumnFilters();
+    updateFilterIndicators();
+  }
+  function applyColumnFilters() {
+    const container = getActiveResultsContainer();
+    if (!container) return;
+    const rows = Array.from(container.querySelectorAll("tbody tr:not(.detail-row)"));
+    rows.forEach((row) => {
+      let shouldShow = true;
+      for (const [fname, allowed] of Object.entries(activeFilters)) {
+        if (allowed.size === 0) {
+          shouldShow = false;
+          break;
+        }
+        const cell = row.querySelector(`td[data-field="${fname}"]`);
+        if (cell) {
+          const val = (cell.textContent || "").trim();
+          if (!allowed.has(val)) {
+            shouldShow = false;
+            break;
+          }
+        }
+      }
+      if (shouldShow) {
+        row.style.display = "";
+      } else {
+        row.style.display = "none";
+        collapseDetailIfHidden(row);
+      }
+    });
+    const s = getState();
     const activeTab = getActiveTab();
-    if (activeTab) {
-        activeTab.status = statusText;
+    if (activeTab && s.activeTabId) {
+      const columnFilters = {};
+      for (const [fieldName, allowedValues] of Object.entries(activeFilters)) {
+        columnFilters[fieldName] = new Set(allowedValues);
+      }
+      setTabColumnFilters(s, s.activeTabId, columnFilters);
     }
-}
-
-function navigateSearchNext() {
-    if (searchMatches.length === 0) return;
-    currentSearchMatchIndex = (currentSearchMatchIndex + 1) % searchMatches.length;
-    highlightCurrentMatch();
-}
-
-function navigateSearchPrev() {
-    if (searchMatches.length === 0) return;
-    currentSearchMatchIndex = (currentSearchMatchIndex - 1 + searchMatches.length) % searchMatches.length;
-    highlightCurrentMatch();
-}
-
-function clearSearch() {
-    document.getElementById('searchInput').value = '';
-    searchResults();
-}
-
-function toggleLogGroupsSection() {
-    const content = document.getElementById('lgSectionContent');
-    const btn = document.getElementById('lgCollapseBtn');
-    const isCollapsed = content.classList.toggle('collapsed');
-    btn.textContent = isCollapsed ? '▶' : '▼';
-    btn.title = isCollapsed ? 'Expand' : 'Collapse';
-}
-
-function toggleFavoritesSection() {
-    const content = document.getElementById('favSectionContent');
-    const btn = document.getElementById('favCollapseBtn');
-    const isCollapsed = content.classList.toggle('collapsed');
-    btn.textContent = isCollapsed ? '▶' : '▼';
-    btn.title = isCollapsed ? 'Expand' : 'Collapse';
-}
-
-function toggleOtherGroupsSection() {
-    const content = document.getElementById('lgSectionContent');
-    const btn = document.getElementById('otherGroupsBtn');
-    const isCollapsed = content.classList.toggle('collapsed');
-    btn.textContent = isCollapsed ? '▶ Other Groups' : '▼ Other Groups';
-}
-
-function updateSelectedCount() {
-    const count = getSelectedLogGroups().length;
-    document.getElementById('lgSelectedCount').textContent = `${count} selected`;
-}
-
-function isLogGroupSelected(name, region) {
-    const currentRegion = document.getElementById('region').value.trim() || 'us-east-2';
-    if (region !== currentRegion) return false;
-
-    const selected = getSelectedLogGroups();
-    return selected.includes(name);
-}
-
-function updateFavoritesCheckboxes() {
-    const favItems = document.querySelectorAll('.fav-item');
-    favItems.forEach(item => {
-        const name = item.dataset.name;
-        const region = item.dataset.region;
-        if (name && region) {
-            const isSelected = isLogGroupSelected(name, region);
-            const btn = item.querySelector('.fav-btn');
-
-            if (isSelected) {
-                item.classList.add('selected');
-            } else {
-                item.classList.remove('selected');
-            }
-
-            if (btn) {
-                btn.title = isSelected ? 'Click to deselect' : 'Click to select';
-            }
-        }
-    });
-}
-
-function toggleFavoriteSelection(fav, shouldSelect) {
-    const currentRegion = document.getElementById('region').value.trim() || 'us-east-2';
-
-    // If different region, switch to favorite's region first
-    if (fav.region !== currentRegion) {
-        document.getElementById('region').value = fav.region;
-        loadLogGroups();
-        // Wait for log groups to load, then select
-        setTimeout(() => {
-            setLogGroupCheckbox(fav.name, shouldSelect);
-        }, 500);
-    } else {
-        setLogGroupCheckbox(fav.name, shouldSelect);
-    }
-}
-
-function setLogGroupCheckbox(name, checked) {
-    const items = document.querySelectorAll('.lg-item');
-    items.forEach(item => {
-        if (item.dataset.name === name) {
-            if (checked) {
-                item.classList.add('selected');
-            } else {
-                item.classList.remove('selected');
-            }
-            updateSelectedCount();
-            updateFavoritesCheckboxes();
-        }
-    });
-}
-
-// Message handler
-window.addEventListener('message', (event) => {
-    const msg = event.data;
-    switch (msg.type) {
-        case 'queryStatus':
-            setStatus(msg.data.status);
-            if (msg.data.status === 'Running') {
-                const btn = document.getElementById('runBtn');
-                if (btn) {
-                    btn.setAttribute('data-state', 'running');
-                    btn.disabled = false;
-                    const label = btn.querySelector('.run-btn-label');
-                    if (label) label.textContent = 'Cancel Query';
-                }
-                // Clear results container when starting new query
-                const container = getActiveResultsContainer();
-                if (container) container.innerHTML = '';
-                currentResults = { rows: [], fieldOrder: [], status: 'Running' };
-                invalidateRowCache();
-                clearAllFilters();
-                
-                // Save status to the active tab
-                const activeTab = getActiveTab();
-                if (activeTab) {
-                    activeTab.status = msg.data.status;
-                }
-            } else if (msg.data.status === 'Aborted') {
-                const btn = document.getElementById('runBtn');
-                if (btn) {
-                    btn.setAttribute('data-state', 'idle');
-                    btn.disabled = false;
-                    const label = btn.querySelector('.run-btn-label');
-                    if (label) label.textContent = 'Run Query';
-                }
-                const statusText = '⏹ Query aborted';
-                setStatus(statusText);
-                
-                // Save abort status to the query tab
-                if (runningQueryTabId) {
-                    const queryTab = tabs.find(t => t.id === runningQueryTabId);
-                    if (queryTab) {
-                        queryTab.status = statusText;
-                    }
-                    setTabStreaming(runningQueryTabId, false);
-                    runningQueryTabId = null;
-                }
-            }
-            break;
-        case 'queryPartialResult':
-            // Append partial results incrementally to the tab that initiated the query
-            if (runningQueryTabId && activeTabId === runningQueryTabId) {
-                // Only update if we're viewing the tab that's running the query
-                appendPartialResults(msg.data);
-                
-                // Check if this is a terminal status (query completed)
-                const isTerminal = msg.data.status && ['Complete', 'Failed', 'Cancelled', 'Timeout'].includes(msg.data.status);
-                const isFinalizing = msg.data.status === 'Finalizing';
-                
-                if (isTerminal) {
-                    // Query completed - update UI to idle state
-                    const btn = document.getElementById('runBtn');
-                    if (btn) {
-                        btn.setAttribute('data-state', 'idle');
-                        btn.disabled = false;
-                        const label = btn.querySelector('.run-btn-label');
-                        if (label) label.textContent = 'Run Query';
-                    }
-                    
-                    const rowCount = currentResults.rows ? currentResults.rows.length : 0;
-                    const statusText = `✓ Query ${msg.data.status} (${rowCount} rows)`;
-                    setStatus(statusText);
-                    
-                    const activeTab = getActiveTab();
-                    if (activeTab) {
-                        activeTab.status = statusText;
-                    }
-                    
-                    setTabStreaming(runningQueryTabId, false);
-                    runningQueryTabId = null;
-                } else if (isFinalizing) {
-                    // Show finalizing status
-                    const rowCount = currentResults.rows ? currentResults.rows.length : 0;
-                    const statusText = `Finalizing query... (${rowCount} rows)`;
-                    setStatus(statusText);
-                    
-                    const activeTab = getActiveTab();
-                    if (activeTab) {
-                        activeTab.status = statusText;
-                    }
-                } else {
-                    // Still running - update status with current row count
-                    const rowCount = currentResults.rows ? currentResults.rows.length : 0;
-                    const statusText = `Running query... (${rowCount} rows)`;
-                    setStatus(statusText);
-                    
-                    // Save status to the active tab
-                    const activeTab = getActiveTab();
-                    if (activeTab) {
-                        activeTab.status = statusText;
-                    }
-                }
-            } else if (runningQueryTabId) {
-                // Save to the background tab without updating status
-                const queryTab = tabs.find(t => t.id === runningQueryTabId);
-                if (queryTab) {
-                    if (!queryTab.results || !queryTab.results.rows) {
-                        queryTab.results = { rows: [], fieldOrder: msg.data.fieldOrder || [], hiddenFields: msg.data.hiddenFields || ['@ptr'] };
-                    }
-                    queryTab.results.rows.push(...msg.data.rows);
-                    queryTab.results.fieldOrder = msg.data.fieldOrder || queryTab.results.fieldOrder;
-                    queryTab.results.hiddenFields = msg.data.hiddenFields || queryTab.results.hiddenFields;
-                    
-                    // Check if this is a terminal status
-                    const isTerminal = msg.data.status && ['Complete', 'Failed', 'Cancelled', 'Timeout'].includes(msg.data.status);
-                    
-                    if (isTerminal) {
-                        // Query completed in background tab
-                        const rowCount = queryTab.results.rows.length;
-                        queryTab.status = `✓ Query ${msg.data.status} (${rowCount} rows)`;
-                        setTabStreaming(runningQueryTabId, false);
-                        runningQueryTabId = null;
-                    } else {
-                        // Update the background tab's status (but don't display it)
-                        const rowCount = queryTab.results.rows.length;
-                        queryTab.status = `Running query... (${rowCount} rows)`;
-                    }
-                    
-                    // Update tabs to show streaming row count or completion
-                    renderTabs();
-                }
-            }
-            break;
-        case 'queryResult':
-            {
-                const btn = document.getElementById('runBtn');
-                if (btn) {
-                    btn.setAttribute('data-state', 'idle');
-                    btn.disabled = false;
-                    const label = btn.querySelector('.run-btn-label');
-                    if (label) label.textContent = 'Run Query';
-                }
-                
-                // Apply results to the tab that ran the query
-                const queryTab = runningQueryTabId ? tabs.find(t => t.id === runningQueryTabId) : null;
-                if (queryTab) {
-                    queryTab.results = msg.data;
-                    setTabStreaming(queryTab.id, false);
-                    
-                    // Update status with row count and save to the tab
-                    const rowCount = msg.data.rows ? msg.data.rows.length : 0;
-                    const statusText = `✓ Query ${msg.data.status} (${rowCount} rows)`;
-                    queryTab.status = statusText;
-                    
-                    // If we're viewing this tab, update the displayed status
-                    if (activeTabId === runningQueryTabId) {
-                        setStatus(statusText);
-                        renderResults(msg.data);
-                    } else {
-                        // Update tabs to show completion in background
-                        renderTabs();
-                    }
-                }
-                
-                runningQueryTabId = null;
-            }
-            break;
-        case 'queryError':
-            {
-                const statusText = '❌ Error: ' + msg.error;
-                setStatus(statusText);
-                
-                const btn = document.getElementById('runBtn');
-                if (btn) {
-                    btn.setAttribute('data-state', 'idle');
-                    btn.disabled = false;
-                    const label = btn.querySelector('.run-btn-label');
-                    if (label) label.textContent = 'Run Query';
-                }
-                
-                // Save error status to the query tab
-                if (runningQueryTabId) {
-                    const queryTab = tabs.find(t => t.id === runningQueryTabId);
-                    if (queryTab) {
-                        queryTab.status = statusText;
-                    }
-                    setTabStreaming(runningQueryTabId, false);
-                    runningQueryTabId = null;
-                }
-            }
-            break;
-        case 'savedQueries':
-            renderSavedQueries(msg.data, msg.source, msg.error);
-            break;
-        case 'logGroupsList':
-            renderLogGroups(msg.data);
-            break;
-        case 'logGroupsListError':
-            setStatus('❌ List error: ' + msg.error);
-            break;
-        case 'favorites':
-            renderFavorites(msg.data);
-            updateStarButtons();
-            break;
-    }
-});
-
-// Initial load
-vscode.postMessage({ type: 'getSavedQueries' });
-vscode.postMessage({ type: 'getFavorites' });
-loadLogGroups(); // auto-load on startup
-toggleTimeMode(); // initialize time mode visibility
-updateSyntaxHighlighting(); // initialize syntax highlighting
-
-// Initialize tabs - create first tab
-if (tabs.length === 0) {
-    const firstTab = createTab({ name: 'Results' });
-    activeTabId = firstTab.id;
     renderTabs();
-    
-    // Make the first tab's results container active
-    const firstResultsContainer = getTabResultsContainer(firstTab.id);
-    if (firstResultsContainer) {
-        firstResultsContainer.classList.add('active');
+    const rowCountText = buildRowCountStatus();
+    if (rowCountText) {
+      const statusText = `\u2713 Query Complete${rowCountText}`;
+      setStatus(statusText);
+      if (activeTab && s.activeTabId) {
+        updateTab(s, s.activeTabId, { status: statusText });
+      }
     }
-}
+  }
+  function buildRowCountStatus() {
+    const tab = getActiveTab();
+    if (!tab || !tab.results || !tab.results.rows) return "";
+    const totalRows = tab.results.rows.length;
+    const container = getActiveResultsContainer();
+    if (!container) return "";
+    const visible = Array.from(container.querySelectorAll("tbody tr:not(.detail-row)")).filter((r) => r.style.display !== "none").length;
+    if (!Object.keys(activeFilters).length) return ` (${totalRows} rows)`;
+    return ` (${visible} of ${totalRows} rows)`;
+  }
+  function updateFilterIndicators() {
+    const container = getActiveResultsContainer();
+    if (!container) return;
+    const headers = Array.from(container.querySelectorAll("thead th[data-field]"));
+    headers.forEach((th) => {
+      const fieldName = th.dataset.field || "";
+      const btn = th.querySelector(".column-filter-btn");
+      if (btn) btn.classList.toggle("active", !!activeFilters[fieldName]);
+    });
+  }
+  function initFiltersForNewResults() {
+    updateFilterIndicators();
+  }
 
-// Note: Previous logic collapsed log groups via a button id (lgCollapseBtn) that no longer exists.
-// Cleaned up to avoid accessing null elements.
+  // src/webview/features/results/builders/TableBuilder.ts
+  var TableBuilder = class {
+    constructor(results, hiddenFields = ["@ptr"]) {
+      this.results = results;
+      this.hiddenFields = hiddenFields;
+      this.table = document.createElement("table");
+    }
+    /**
+     * Build the complete table structure.
+     */
+    build() {
+      this.buildHeader();
+      this.buildBody();
+      return this.table;
+    }
+    /**
+     * Build table header with column names and filter buttons.
+     */
+    buildHeader() {
+      const thead = document.createElement("thead");
+      const headerRow = document.createElement("tr");
+      headerRow.appendChild(this.createExpandHeader());
+      const visibleFields = this.getVisibleFields();
+      visibleFields.forEach((field, index) => {
+        const th = this.createColumnHeader(field, index, visibleFields.length);
+        headerRow.appendChild(th);
+      });
+      thead.appendChild(headerRow);
+      this.table.appendChild(thead);
+    }
+    /**
+     * Build table body with data rows.
+     */
+    buildBody() {
+      const tbody = document.createElement("tbody");
+      const visibleFields = this.getVisibleFields();
+      this.results.rows.forEach((row, rowIndex) => {
+        const tr = this.createRow(row, rowIndex, visibleFields);
+        tbody.appendChild(tr);
+      });
+      this.table.appendChild(tbody);
+    }
+    /**
+     * Get list of fields that should be displayed (not hidden).
+     */
+    getVisibleFields() {
+      return this.results.fieldOrder.filter(
+        (f) => !this.hiddenFields.includes(f)
+      );
+    }
+    /**
+     * Create the expand column header.
+     */
+    createExpandHeader() {
+      const th = document.createElement("th");
+      th.className = "expand-col-header";
+      th.style.width = "34px";
+      return th;
+    }
+    /**
+     * Create a column header with field name, filter button, and resizer.
+     */
+    createColumnHeader(field, index, totalColumns) {
+      const th = document.createElement("th");
+      th.style.position = "relative";
+      th.dataset.field = field;
+      const headerContent = document.createElement("div");
+      headerContent.className = "th-content";
+      const span = document.createElement("span");
+      span.textContent = field;
+      headerContent.appendChild(span);
+      const filterBtn = this.createFilterButton(field);
+      headerContent.appendChild(filterBtn);
+      th.appendChild(headerContent);
+      if (index < totalColumns - 1) {
+        const resizer = this.createResizer();
+        th.appendChild(resizer);
+      }
+      return th;
+    }
+    /**
+     * Create a filter button for a column.
+     */
+    createFilterButton(field) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "column-filter-btn";
+      btn.title = `Filter ${field}`;
+      btn.innerHTML = "\u22EE";
+      btn.dataset.field = field;
+      return btn;
+    }
+    /**
+     * Create a column resizer element.
+     */
+    createResizer() {
+      const resizer = document.createElement("div");
+      resizer.className = "column-resizer";
+      return resizer;
+    }
+    /**
+     * Create a data row with expand button and cells.
+     */
+    createRow(row, rowIndex, visibleFields) {
+      const tr = document.createElement("tr");
+      tr.dataset.rowIndex = String(rowIndex);
+      const expandCell = this.createExpandCell();
+      tr.appendChild(expandCell);
+      visibleFields.forEach((field) => {
+        const cell = this.createDataCell(row, field);
+        tr.appendChild(cell);
+      });
+      return tr;
+    }
+    /**
+     * Create expand/collapse cell for row details.
+     */
+    createExpandCell() {
+      const td = document.createElement("td");
+      td.className = "expand-cell";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "expand-btn";
+      btn.title = "Show details";
+      btn.textContent = "\u203A";
+      td.appendChild(btn);
+      return td;
+    }
+    /**
+     * Create a data cell for a specific field.
+     */
+    createDataCell(row, field) {
+      const td = document.createElement("td");
+      const valObj = row.fields.find((x) => x.field === field);
+      const val = valObj ? valObj.value : "";
+      td.textContent = val;
+      td.dataset.field = field;
+      return td;
+    }
+  };
 
+  // src/webview/lib/yaml.ts
+  function jsonToYaml(root) {
+    const lines = [];
+    const quoteIfNeeded = (s) => {
+      if (s === "") return '""';
+      if (/^(?:true|false|null|[-+]?[0-9]+(?:\.[0-9]+)?)$/i.test(s)) return '"' + s + '"';
+      if (/[:\-?&*!|>'"@`{}#%\n\t]/.test(s)) return JSON.stringify(s);
+      return s;
+    };
+    const indent = (lvl) => "  ".repeat(lvl);
+    const emit = (lvl, text) => lines.push(indent(lvl) + text);
+    const isScalar = (v) => v === null || ["string", "number", "boolean"].includes(typeof v);
+    function walk(val, lvl) {
+      if (val === null) {
+        emit(lvl, "null");
+        return;
+      }
+      if (Array.isArray(val)) {
+        if (!val.length) {
+          emit(lvl, "[]");
+          return;
+        }
+        val.forEach((item) => {
+          if (isScalar(item)) {
+            if (typeof item === "string" && /\n/.test(item)) {
+              emit(lvl, "- |");
+              item.split("\n").forEach((l) => emit(lvl + 1, l));
+            } else {
+              emit(lvl, "- " + (typeof item === "string" ? quoteIfNeeded(item) : String(item)));
+            }
+          } else {
+            emit(lvl, "-");
+            walk(item, lvl + 1);
+          }
+        });
+        return;
+      }
+      if (typeof val === "object") {
+        const keys = Object.keys(val);
+        if (!keys.length) {
+          emit(lvl, "{}");
+          return;
+        }
+        keys.forEach((k) => {
+          const v = val[k];
+          if (isScalar(v)) {
+            if (typeof v === "string" && /\n/.test(v)) {
+              emit(lvl, k + ": |");
+              v.split("\n").forEach((l) => emit(lvl + 1, l));
+            } else {
+              emit(lvl, k + ": " + (typeof v === "string" ? quoteIfNeeded(v) : String(v)));
+            }
+          } else if (Array.isArray(v)) {
+            if (!v.length) emit(lvl, k + ": []");
+            else {
+              emit(lvl, k + ":");
+              walk(v, lvl + 1);
+            }
+          } else {
+            const childKeys = Object.keys(v);
+            if (!childKeys.length) emit(lvl, k + ": {}");
+            else {
+              emit(lvl, k + ":");
+              walk(v, lvl + 1);
+            }
+          }
+        });
+        return;
+      }
+      if (typeof val === "string") {
+        if (/\n/.test(val)) {
+          emit(lvl, "|");
+          val.split("\n").forEach((l) => emit(lvl + 1, l));
+        } else emit(lvl, quoteIfNeeded(val));
+        return;
+      }
+      if (typeof val === "number" || typeof val === "boolean") {
+        emit(lvl, String(val));
+        return;
+      }
+      emit(lvl, JSON.stringify(val));
+    }
+    walk(root, 0);
+    return lines.join("\n");
+  }
+  function highlightYaml(yamlText) {
+    const lines = yamlText.split("\n");
+    const result = [];
+    let inBlock = false;
+    let blockIndent = 0;
+    for (const line of lines) {
+      if (!inBlock) {
+        const trimmed = line.trimEnd();
+        if (/^\s*[^:#]+:\s*[|>][-+]?\s*$/.test(trimmed) || /^\s*[|>][-+]?\s*$/.test(trimmed) || /^\s*-\s*[|>][-+]?\s*$/.test(trimmed)) {
+          inBlock = true;
+          blockIndent = (/^\s*/.exec(line)?.[0].length || 0) + 1;
+          result.push(escapeHtml(line));
+          continue;
+        }
+        let hl = escapeHtml(line).replace(/^(\s*)([^\s][^:]*?):/g, (m, indent, key) => `${indent}<span class="token-field">${escapeHtml(key)}</span>:`).replace(/\b(true|false|null)\b/g, '<span class="token-operator">$1</span>').replace(/(-?\b\d+(?:\.\d+)?\b)/g, '<span class="token-number">$1</span>').replace(/(&quot;.*?&quot;)/g, '<span class="token-string">$1</span>');
+        result.push(hl);
+      } else {
+        result.push(escapeHtml(line));
+        const currentIndent = /^\s*/.exec(line)?.[0].length || 0;
+        if (line.trim() === "" || currentIndent < blockIndent) inBlock = false;
+      }
+    }
+    return result.join("\n");
+  }
+
+  // src/webview/features/results/details.ts
+  function toggleRowDetails(tr, rowData) {
+    const already = tr.nextSibling && tr.nextSibling.classList?.contains("detail-row");
+    const expandBtn = tr.querySelector(".expand-btn");
+    if (already) {
+      tr.parentNode?.removeChild(tr.nextSibling);
+      if (expandBtn) {
+        expandBtn.textContent = "\u203A";
+        expandBtn.title = "Show details";
+      }
+      return;
+    }
+    const detailTr = document.createElement("tr");
+    detailTr.className = "detail-row";
+    const td = document.createElement("td");
+    td.colSpan = tr.children.length;
+    const pre = document.createElement("pre");
+    pre.className = "detail-json";
+    const messageField = rowData.fields.find((f) => f.field === "@message");
+    const messageValue = messageField ? messageField.value : "(no @message)";
+    if (messageValue && /^(\s*[\[{])/.test(messageValue)) {
+      try {
+        const parsed = JSON.parse(messageValue);
+        const yaml = jsonToYaml(parsed);
+        pre.innerHTML = highlightYaml(yaml);
+      } catch {
+        pre.textContent = messageValue || "";
+      }
+    } else {
+      pre.textContent = messageValue || "";
+    }
+    td.appendChild(pre);
+    detailTr.appendChild(td);
+    tr.parentNode?.insertBefore(detailTr, tr.nextSibling);
+    if (expandBtn) {
+      expandBtn.textContent = "\u2304";
+      expandBtn.title = "Hide details";
+    }
+  }
+
+  // src/webview/features/results/columnResize.ts
+  var resizingColumn = null;
+  var resizeStartX = 0;
+  var resizeStartWidth = 0;
+  function initColumnResize(e, th) {
+    e.preventDefault();
+    resizingColumn = th;
+    resizeStartX = e.pageX;
+    resizeStartWidth = th.offsetWidth;
+    document.addEventListener("mousemove", handleColumnResize);
+    document.addEventListener("mouseup", stopColumnResize);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
+  function handleColumnResize(e) {
+    if (!resizingColumn) return;
+    const diff = e.pageX - resizeStartX;
+    const newWidth = Math.max(50, resizeStartWidth + diff);
+    resizingColumn.style.width = newWidth + "px";
+    resizingColumn.style.minWidth = newWidth + "px";
+    resizingColumn.style.maxWidth = newWidth + "px";
+  }
+  function stopColumnResize() {
+    resizingColumn = null;
+    document.removeEventListener("mousemove", handleColumnResize);
+    document.removeEventListener("mouseup", stopColumnResize);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }
+
+  // src/webview/features/results/builders/EventBinder.ts
+  var TableEventBinder = class {
+    constructor(container) {
+      this.container = container;
+    }
+    /**
+     * Bind all table events (expand, filter, resize).
+     */
+    bindAll() {
+      this.bindExpandButtons();
+      this.bindFilterButtons();
+      this.bindColumnResizers();
+    }
+    /**
+     * Bind expand button clicks using event delegation.
+     */
+    bindExpandButtons() {
+      this.container.addEventListener("click", (e) => {
+        const target = e.target;
+        if (target.classList.contains("expand-btn")) {
+          const row = target.closest("tr");
+          if (row) {
+            this.handleExpandClick(row);
+          }
+        }
+      });
+    }
+    /**
+     * Bind filter button clicks using event delegation.
+     */
+    bindFilterButtons() {
+      this.container.addEventListener("click", (e) => {
+        const target = e.target;
+        if (target.classList.contains("column-filter-btn")) {
+          e.stopPropagation();
+          const field = target.dataset.field;
+          if (field) {
+            this.handleFilterClick(field, target);
+          }
+        }
+      });
+    }
+    /**
+     * Bind column resizer mousedown using event delegation.
+     */
+    bindColumnResizers() {
+      this.container.addEventListener("mousedown", (e) => {
+        const target = e.target;
+        if (target.classList.contains("column-resizer")) {
+          const th = target.closest("th");
+          if (th) {
+            this.handleResizerMouseDown(e, th);
+          }
+        }
+      });
+    }
+    /**
+     * Handle expand button click to toggle row details.
+     */
+    handleExpandClick(row) {
+      const rowIndex = parseInt(row.dataset.rowIndex || "0", 10);
+      const s = getState();
+      const tab = s.tabs.find((t) => t.id === s.activeTabId);
+      if (tab?.results) {
+        const rowData = tab.results.rows[rowIndex];
+        toggleRowDetails(row, rowData);
+      }
+    }
+    /**
+     * Handle filter button click to show column filter menu.
+     */
+    handleFilterClick(field, button) {
+      showColumnFilter(field, button);
+    }
+    /**
+     * Handle column resizer mousedown to start resize operation.
+     */
+    handleResizerMouseDown(e, th) {
+      initColumnResize(e, th);
+    }
+  };
+
+  // src/webview/features/results/render.ts
+  function getTabResultsContainer(tabId) {
+    return document.getElementById(`results-${tabId}`);
+  }
+  function renderResults(payload, skipClearFilters = false, forceTabId) {
+    const s = getState();
+    const targetTabId = forceTabId ?? s.runningQueryTabId ?? s.activeTabId;
+    if (targetTabId == null) return;
+    if (!completeTabQuery(s, targetTabId, payload)) return;
+    const container = getTabResultsContainer(targetTabId);
+    if (!container) return;
+    const isActiveTab = targetTabId === s.activeTabId;
+    const shouldRenderToDOM = forceTabId !== void 0 || isActiveTab;
+    if (!shouldRenderToDOM) {
+      return;
+    }
+    container.innerHTML = "";
+    invalidateRowCache();
+    if (!skipClearFilters) clearAllFilters();
+    if (!payload || !payload.fieldOrder || !payload.rows || !payload.rows.length) {
+      container.textContent = "No results.";
+      return;
+    }
+    const hidden = Array.isArray(payload.hiddenFields) ? payload.hiddenFields : ["@ptr"];
+    const builder = new TableBuilder(payload, hidden);
+    const table = builder.build();
+    container.appendChild(table);
+    const eventBinder = new TableEventBinder(container);
+    eventBinder.bindAll();
+    renderTabs();
+    setStatus(`\u2713 Query Complete (${payload.rows.length} rows)`);
+    initFiltersForNewResults();
+    scheduleSearchRerun();
+  }
+  function appendPartialResults(partial) {
+    const s = getState();
+    const targetTabId = s.runningQueryTabId ?? s.activeTabId;
+    if (targetTabId == null) return;
+    const tab = s.tabs.find((t) => t.id === targetTabId);
+    if (!tab) return;
+    if (!tab.results || !tab.results.rows) {
+      tab.results = { rows: [], fieldOrder: partial.fieldOrder || [], hiddenFields: partial.hiddenFields || ["@ptr"] };
+    }
+    const startIdx = tab.results.rows.length;
+    tab.results.rows.push(...partial.rows);
+    if (partial.fieldOrder && partial.fieldOrder.length) tab.results.fieldOrder = partial.fieldOrder;
+    if (partial.hiddenFields) tab.results.hiddenFields = partial.hiddenFields;
+    updateTab(s, targetTabId, { isStreaming: true });
+    const container = getTabResultsContainer(targetTabId);
+    if (!container) return;
+    const isActiveTab = targetTabId === s.activeTabId;
+    if (!isActiveTab) {
+      return;
+    }
+    let table = container.querySelector("table");
+    let tbody = table ? table.querySelector("tbody") : null;
+    const hidden = Array.isArray(tab.results.hiddenFields) ? tab.results.hiddenFields : ["@ptr"];
+    const fields = tab.results.fieldOrder.filter((f) => !hidden.includes(f));
+    if (!table) {
+      invalidateRowCache();
+      clearAllFilters();
+      const builder = new TableBuilder(tab.results, hidden);
+      table = builder.build();
+      container.innerHTML = "";
+      container.appendChild(table);
+      const eventBinder = new TableEventBinder(container);
+      eventBinder.bindAll();
+      tbody = table.querySelector("tbody");
+    } else {
+      partial.rows.forEach((row, idx) => {
+        const tr = document.createElement("tr");
+        tr.dataset.rowIndex = String(startIdx + idx);
+        const expandCell = document.createElement("td");
+        expandCell.className = "expand-cell";
+        const expandBtn = document.createElement("button");
+        expandBtn.type = "button";
+        expandBtn.className = "expand-btn";
+        expandBtn.textContent = "\u203A";
+        expandCell.appendChild(expandBtn);
+        tr.appendChild(expandCell);
+        fields.forEach((f) => {
+          const val = row.fields.find((x) => x.field === f)?.value || "";
+          const td = document.createElement("td");
+          td.textContent = val;
+          td.dataset.field = f;
+          tr.appendChild(td);
+        });
+        tbody?.appendChild(tr);
+      });
+    }
+    const statusMsg = `Streaming... (${tab.results.rows.length} rows)`;
+    updateTab(s, targetTabId, { status: statusMsg });
+    renderTabs();
+    setStatus(statusMsg);
+  }
+
+  // src/webview/features/tabs/events.ts
+  function initTabsEvents() {
+    const newBtn = document.getElementById("newTabBtn");
+    if (newBtn) newBtn.addEventListener("click", () => {
+      const s = getState();
+      if (s.activeTabId != null) {
+        const searchInput2 = document.getElementById("searchInput");
+        const hideCheckbox2 = document.getElementById("searchHideNonMatching");
+        if (searchInput2) {
+          updateTab(s, s.activeTabId, {
+            searchQuery: searchInput2.value.trim(),
+            searchHideNonMatching: hideCheckbox2?.checked || false
+          });
+        }
+      }
+      createNewTab();
+      renderTabs();
+      const s2 = getState();
+      const searchInput = document.getElementById("searchInput");
+      const hideCheckbox = document.getElementById("searchHideNonMatching");
+      if (searchInput) {
+        searchInput.value = "";
+        if (hideCheckbox) hideCheckbox.checked = false;
+        clearSearch();
+      }
+      if (s2.activeTabId) activateResultsContainer(s2.activeTabId);
+    });
+    window.addEventListener("cwlv:switch-tab", (e) => {
+      const targetTabId = e.detail.id;
+      const s = getState();
+      if (s.activeTabId != null) {
+        const searchInput2 = document.getElementById("searchInput");
+        const hideCheckbox2 = document.getElementById("searchHideNonMatching");
+        if (searchInput2) {
+          updateTab(s, s.activeTabId, {
+            searchQuery: searchInput2.value.trim(),
+            searchHideNonMatching: hideCheckbox2?.checked || false
+          });
+        }
+      }
+      switchToTab2(targetTabId);
+      renderTabs();
+      activateResultsContainer(targetTabId);
+      const tab = s.tabs.find((t) => t.id === targetTabId);
+      const searchInput = document.getElementById("searchInput");
+      const hideCheckbox = document.getElementById("searchHideNonMatching");
+      if (tab && searchInput) {
+        searchInput.value = tab.searchQuery || "";
+        if (hideCheckbox) {
+          hideCheckbox.checked = tab.searchHideNonMatching || false;
+        }
+        if (tab.results && tab.results.rows.length > 0) {
+          if (tab.searchQuery && tab.searchQuery.trim()) {
+            setTimeout(() => {
+              searchResults(false, true, tab.searchIndex >= 0 ? tab.searchIndex : void 0);
+            }, 0);
+          } else {
+            clearSearch();
+          }
+        }
+      }
+      const targetResults = document.getElementById(`results-${targetTabId}`);
+      const hasTable = targetResults && targetResults.querySelector("table");
+      if (tab && tab.results && targetResults && !hasTable) {
+        renderResults(tab.results, true, targetTabId);
+      }
+    });
+    window.addEventListener("cwlv:close-tab", (e) => {
+      closeTab2(e.detail.id);
+      renderTabs();
+      const s = getState();
+      if (s.activeTabId) activateResultsContainer(s.activeTabId);
+    });
+  }
+
+  // src/webview/features/logGroups/logGroups.ts
+  var currentLogGroups = [];
+  function loadLogGroups() {
+    const regionEl = document.getElementById("region");
+    const filterEl = document.getElementById("lgFilter");
+    const region = regionEl?.value.trim() || "us-east-2";
+    const prefix = filterEl?.value.trim() || "";
+    setStatus("Loading log groups...");
+    send({ type: "listLogGroups", region, prefix });
+  }
+  function renderLogGroups(groups) {
+    currentLogGroups = groups;
+    const container = document.getElementById("lgList");
+    if (!container) return;
+    const previouslySelected = getSelectedLogGroups();
+    container.innerHTML = "";
+    if (!groups.length) {
+      container.innerHTML = '<div class="empty-state">No log groups found</div>';
+      setStatus("");
+      updateSelectedCount();
+      return;
+    }
+    const regionEl = document.getElementById("region");
+    const region = regionEl?.value.trim() || "us-east-2";
+    const favorites = getCurrentFavorites();
+    groups.forEach((g) => {
+      const isFav = favorites.some((f) => f.name === g && f.region === region);
+      const isSelected = previouslySelected.includes(g);
+      const wrapper = document.createElement("div");
+      wrapper.className = "lg-item";
+      wrapper.dataset.name = g;
+      wrapper.dataset.region = region;
+      if (isSelected) {
+        wrapper.classList.add("selected");
+      }
+      const btn = document.createElement("button");
+      btn.className = "lg-btn";
+      btn.title = isSelected ? "Click to deselect" : "Click to select";
+      btn.addEventListener("click", () => {
+        const currentlySelected = wrapper.classList.contains("selected");
+        if (currentlySelected) {
+          wrapper.classList.remove("selected");
+        } else {
+          wrapper.classList.add("selected");
+        }
+        updateSelectedCount();
+        updateFavoritesCheckboxes();
+      });
+      const checkmark = document.createElement("span");
+      checkmark.className = "lg-checkmark";
+      checkmark.textContent = "\u2713";
+      const text = document.createElement("span");
+      text.className = "lg-text";
+      text.textContent = g;
+      btn.appendChild(checkmark);
+      btn.appendChild(text);
+      const starBtn = document.createElement("button");
+      starBtn.className = "star-btn" + (isFav ? " active" : "");
+      starBtn.textContent = isFav ? "\u2605" : "\u2606";
+      starBtn.title = isFav ? "Remove from favorites" : "Add to favorites";
+      starBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleFavorite(g, region);
+      });
+      wrapper.appendChild(btn);
+      wrapper.appendChild(starBtn);
+      container.appendChild(wrapper);
+    });
+    setStatus("");
+    updateSelectedCount();
+    updateFavoritesCheckboxes();
+  }
+  function filterLogGroups() {
+    const filterEl = document.getElementById("lgFilter");
+    const filter = filterEl?.value.trim().toLowerCase() || "";
+    const items = Array.from(document.querySelectorAll(".lg-item"));
+    items.forEach((item) => {
+      const name = (item.dataset.name || "").toLowerCase();
+      item.style.display = name.includes(filter) ? "flex" : "none";
+    });
+  }
+  function updateSelectedCount() {
+    const count = getSelectedLogGroups().length;
+    const countEl = document.getElementById("lgSelectedCount");
+    if (countEl) {
+      countEl.textContent = `${count} selected`;
+    }
+  }
+  function getSelectedLogGroups() {
+    const container = document.getElementById("lgList");
+    if (!container) return [];
+    return Array.from(container.querySelectorAll(".lg-item.selected")).map((item) => item.dataset.name || "").filter(Boolean);
+  }
+  function toggleOtherGroupsSection() {
+    const content = document.getElementById("lgSectionContent");
+    const btn = document.getElementById("otherGroupsBtn");
+    if (!content || !btn) return;
+    const isCollapsed = content.classList.toggle("collapsed");
+    btn.textContent = isCollapsed ? "\u25B6 Other Groups" : "\u25BC Other Groups";
+  }
+  function initLogGroupsUI() {
+    const refreshBtn = document.getElementById("lgRefreshBtn");
+    const filterInput = document.getElementById("lgFilter");
+    const otherGroupsBtn = document.getElementById("otherGroupsBtn");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", loadLogGroups);
+    }
+    if (filterInput) {
+      filterInput.addEventListener("input", filterLogGroups);
+    }
+    if (otherGroupsBtn) {
+      otherGroupsBtn.addEventListener("click", toggleOtherGroupsSection);
+    }
+    loadLogGroups();
+  }
+
+  // src/webview/features/favorites/favorites.ts
+  var currentFavorites = [];
+  function isLogGroupSelected(name, region) {
+    const currentRegion = document.getElementById("region")?.value.trim() || "us-east-2";
+    if (region !== currentRegion) return false;
+    const lgList = document.getElementById("lgList");
+    if (!lgList) return false;
+    const selected = Array.from(lgList.querySelectorAll(".lg-item.selected"));
+    return selected.some((item) => item.dataset.name === name);
+  }
+  function toggleFavorite(name, region) {
+    const isFav = currentFavorites.some((f) => f.name === name && f.region === region);
+    if (isFav) {
+      send({ type: "removeFavorite", name, region });
+    } else {
+      send({ type: "addFavorite", data: { name, region } });
+    }
+  }
+  function renderFavorites(favs) {
+    currentFavorites = favs;
+    const container = document.getElementById("favList");
+    const countEl = document.getElementById("favCount");
+    if (!container) return;
+    container.innerHTML = "";
+    if (countEl) countEl.textContent = String(favs.length);
+    if (!favs.length) {
+      container.innerHTML = '<div class="empty-state">No favorites yet. Click \u2605 next to a log group.</div>';
+      return;
+    }
+    favs.forEach((f) => {
+      const isSelected = isLogGroupSelected(f.name, f.region);
+      const wrapper = document.createElement("div");
+      wrapper.className = "fav-item";
+      wrapper.dataset.name = f.name;
+      wrapper.dataset.region = f.region;
+      if (isSelected) {
+        wrapper.classList.add("selected");
+      }
+      const btn = document.createElement("button");
+      btn.className = "fav-btn";
+      btn.title = isSelected ? "Click to deselect" : "Click to select";
+      btn.addEventListener("click", () => {
+        const currentlySelected = isLogGroupSelected(f.name, f.region);
+        toggleFavoriteSelection(f, !currentlySelected);
+      });
+      const checkmark = document.createElement("span");
+      checkmark.className = "fav-checkmark";
+      checkmark.textContent = "\u2713";
+      const text = document.createElement("span");
+      text.className = "fav-text";
+      text.textContent = `${f.name} (${f.region})`;
+      btn.appendChild(checkmark);
+      btn.appendChild(text);
+      wrapper.appendChild(btn);
+      container.appendChild(wrapper);
+    });
+  }
+  function updateFavoritesCheckboxes() {
+    const favItems = Array.from(document.querySelectorAll(".fav-item"));
+    favItems.forEach((item) => {
+      const name = item.dataset.name;
+      const region = item.dataset.region;
+      if (name && region) {
+        const isSelected = isLogGroupSelected(name, region);
+        const btn = item.querySelector(".fav-btn");
+        if (isSelected) {
+          item.classList.add("selected");
+        } else {
+          item.classList.remove("selected");
+        }
+        if (btn) {
+          btn.title = isSelected ? "Click to deselect" : "Click to select";
+        }
+      }
+    });
+  }
+  function toggleFavoriteSelection(fav, shouldSelect) {
+    const currentRegion = document.getElementById("region")?.value.trim() || "us-east-2";
+    if (fav.region !== currentRegion) {
+      const regionEl = document.getElementById("region");
+      if (regionEl) regionEl.value = fav.region;
+      send({ type: "listLogGroups", region: fav.region });
+      setTimeout(() => {
+        setLogGroupCheckbox(fav.name, shouldSelect);
+      }, 500);
+    } else {
+      setLogGroupCheckbox(fav.name, shouldSelect);
+    }
+  }
+  function setLogGroupCheckbox(name, checked) {
+    const items = Array.from(document.querySelectorAll(".lg-item"));
+    items.forEach((item) => {
+      if (item.dataset.name === name) {
+        if (checked) {
+          item.classList.add("selected");
+        } else {
+          item.classList.remove("selected");
+        }
+        updateSelectedCount();
+        updateFavoritesCheckboxes();
+      }
+    });
+  }
+  function updateStarButtons2() {
+    const regionEl = document.getElementById("region");
+    const region = regionEl?.value.trim() || "us-east-2";
+    const items = Array.from(document.querySelectorAll(".lg-item"));
+    items.forEach((item) => {
+      const name = item.dataset.name;
+      const starBtn = item.querySelector(".star-btn");
+      if (starBtn && name) {
+        const isFav = currentFavorites.some((f) => f.name === name && f.region === region);
+        starBtn.textContent = isFav ? "\u2605" : "\u2606";
+        starBtn.title = isFav ? "Remove from favorites" : "Add to favorites";
+        if (isFav) {
+          starBtn.classList.add("active");
+        } else {
+          starBtn.classList.remove("active");
+        }
+      }
+    });
+  }
+  function getCurrentFavorites() {
+    return currentFavorites;
+  }
+
+  // src/webview/features/query/editor.ts
+  var KEYWORDS = ["fields", "filter", "sort", "stats", "limit", "display", "parse", "by", "as", "asc", "desc", "dedup", "head", "tail"];
+  var FUNCTIONS = ["count", "sum", "avg", "min", "max", "earliest", "latest", "pct", "stddev", "concat", "strlen", "toupper", "tolower", "trim", "ltrim", "rtrim", "contains", "replace", "strcontains", "ispresent", "isblank", "isempty", "isnull", "coalesce", "bin", "diff", "floor", "ceil", "abs", "log", "sqrt", "exp"];
+  var OPERATORS = ["like", "in", "and", "or", "not", "regex", "match"];
+  var persistTimer = null;
+  var commentToken = "#";
+  function escapeHtml2(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+  function highlightLine(line) {
+    if (!line) return "\n";
+    let result = "";
+    let i = 0;
+    while (i < line.length) {
+      if (/\s/.test(line[i])) {
+        result += line[i];
+        i++;
+        continue;
+      }
+      if (line[i] === "#") {
+        result += `<span class="token-comment">${escapeHtml2(line.slice(i))}</span>`;
+        break;
+      }
+      if (line[i] === '"' || line[i] === "'") {
+        const quote = line[i];
+        let end = i + 1;
+        while (end < line.length && line[end] !== quote) {
+          if (line[end] === "\\") end++;
+          end++;
+        }
+        if (end < line.length) end++;
+        result += `<span class="token-string">${escapeHtml2(line.slice(i, end))}</span>`;
+        i = end;
+        continue;
+      }
+      if (line[i] === "/") {
+        let end = i + 1;
+        while (end < line.length && line[end] !== "/") {
+          if (line[end] === "\\") end++;
+          end++;
+        }
+        if (end < line.length) end++;
+        result += `<span class="token-regex">${escapeHtml2(line.slice(i, end))}</span>`;
+        i = end;
+        continue;
+      }
+      if (/\d/.test(line[i])) {
+        let end = i;
+        while (end < line.length && /[\d.]/.test(line[end])) end++;
+        result += `<span class="token-number">${escapeHtml2(line.slice(i, end))}</span>`;
+        i = end;
+        continue;
+      }
+      if (/[|=<>!+\-*/%(),\[\]]/.test(line[i])) {
+        result += `<span class="token-operator">${escapeHtml2(line[i])}</span>`;
+        i++;
+        continue;
+      }
+      if (/[a-zA-Z_@]/.test(line[i])) {
+        let end = i;
+        while (end < line.length && /[a-zA-Z0-9_@.]/.test(line[end])) end++;
+        const word = line.slice(i, end);
+        const lowerWord = word.toLowerCase();
+        if (KEYWORDS.includes(lowerWord)) {
+          result += `<span class="token-keyword">${escapeHtml2(word)}</span>`;
+        } else if (FUNCTIONS.includes(lowerWord)) {
+          result += `<span class="token-function">${escapeHtml2(word)}</span>`;
+        } else if (OPERATORS.includes(lowerWord)) {
+          result += `<span class="token-operator">${escapeHtml2(word)}</span>`;
+        } else if (word.startsWith("@")) {
+          result += `<span class="token-field">${escapeHtml2(word)}</span>`;
+        } else {
+          result += escapeHtml2(word);
+        }
+        i = end;
+        continue;
+      }
+      result += escapeHtml2(line[i]);
+      i++;
+    }
+    return result;
+  }
+  function highlightQuery(text) {
+    if (!text) return "";
+    const lines = text.split("\n");
+    return lines.map((line) => highlightLine(line)).join("\n");
+  }
+  function syncScroll() {
+    const queryEditor = document.getElementById("query");
+    const queryHighlight = document.getElementById("queryHighlight");
+    if (queryEditor && queryHighlight) {
+      queryHighlight.scrollTop = queryEditor.scrollTop;
+      queryHighlight.scrollLeft = queryEditor.scrollLeft;
+    }
+  }
+  function updateSyntaxHighlighting() {
+    const queryEditor = document.getElementById("query");
+    const queryHighlight = document.getElementById("queryHighlight");
+    if (!queryEditor || !queryHighlight) return;
+    const text = queryEditor.value;
+    queryHighlight.innerHTML = highlightQuery(text);
+    syncScroll();
+  }
+  function schedulePersistLastQuery() {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = window.setTimeout(() => {
+      try {
+        const queryEditor = document.getElementById("query");
+        const query = queryEditor?.value || "";
+        send({ type: "updateLastQuery", query });
+      } catch (_) {
+      }
+    }, 400);
+  }
+  function escapeForRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function toggleCommentInQueryEditor() {
+    const editor = document.getElementById("query");
+    if (!editor) return;
+    const text = editor.value;
+    let selStart = editor.selectionStart;
+    let selEnd = editor.selectionEnd;
+    if (selStart === selEnd) {
+      selStart = text.lastIndexOf("\n", selStart - 1) + 1;
+      const next = text.indexOf("\n", selEnd);
+      selEnd = next === -1 ? text.length : next;
+    } else {
+      selStart = text.lastIndexOf("\n", selStart - 1) + 1;
+      const after = text.indexOf("\n", selEnd);
+      selEnd = after === -1 ? text.length : after;
+    }
+    const block = text.slice(selStart, selEnd);
+    const lines = block.split("\n");
+    const nonEmpty = lines.filter((l) => l.trim() !== "");
+    const isCommented = (l) => {
+      const indentMatch = /^[\t ]*/.exec(l) || [""];
+      const afterIndent = l.slice(indentMatch[0].length);
+      return afterIndent.startsWith(commentToken);
+    };
+    const allCommented = nonEmpty.length > 0 && nonEmpty.every(isCommented);
+    const out = lines.map((line) => {
+      if (line.trim() === "") return line;
+      const indentMatch = /^[\t ]*/.exec(line) || [""];
+      const indent = indentMatch[0];
+      const afterIndent = line.slice(indent.length);
+      if (allCommented) {
+        const escapedToken = escapeForRegex(commentToken);
+        const withSpace = new RegExp(`^${escapedToken} ?`);
+        return indent + afterIndent.replace(withSpace, "");
+      } else {
+        return indent + commentToken + " " + afterIndent;
+      }
+    }).join("\n");
+    editor.value = text.slice(0, selStart) + out + text.slice(selEnd);
+    editor.selectionStart = selStart;
+    editor.selectionEnd = selStart + out.length;
+    updateSyntaxHighlighting();
+  }
+  function initQueryEditorUI() {
+    const queryEditor = document.getElementById("query");
+    if (!queryEditor) return;
+    queryEditor.addEventListener("input", () => {
+      updateSyntaxHighlighting();
+      schedulePersistLastQuery();
+    });
+    queryEditor.addEventListener("scroll", syncScroll);
+    updateSyntaxHighlighting();
+  }
+  function getQueryText() {
+    const editor = document.getElementById("query");
+    return editor?.value || "";
+  }
+  function setQueryText(text) {
+    const editor = document.getElementById("query");
+    if (editor) {
+      editor.value = text;
+      updateSyntaxHighlighting();
+    }
+  }
+
+  // src/webview/features/savedQueries/savedQueries.ts
+  var savedQueries = [];
+  var savedQueriesSource = "aws";
+  function getSelectedLogGroups2() {
+    const container = document.getElementById("lgList");
+    if (!container) return [];
+    return Array.from(container.querySelectorAll(".lg-item.selected")).map((item) => item.dataset.name || "").filter(Boolean);
+  }
+  function renderSavedQueries(list, source, error) {
+    savedQueries = list;
+    if (source) savedQueriesSource = source;
+    const select = document.getElementById("savedSelect");
+    if (!select) return;
+    const header = source === "aws" ? "-- Saved Queries --" : "-- Load Local Saved Query --";
+    select.innerHTML = `<option value="">${header}</option>`;
+    list.forEach((item, idx) => {
+      const opt = document.createElement("option");
+      opt.value = String(idx);
+      opt.textContent = item.name;
+      select.appendChild(opt);
+    });
+    if (error) {
+      const statusEl = document.getElementById("status");
+      if (statusEl) statusEl.textContent = `\u26A0 Saved queries fallback (${error})`;
+    }
+  }
+  function loadSavedQuery() {
+    const select = document.getElementById("savedSelect");
+    if (!select) return;
+    const idx = parseInt(select.value, 10);
+    if (isNaN(idx)) return;
+    const query = savedQueries[idx];
+    if (query) {
+      setQueryText(query.query);
+    }
+  }
+  function saveCurrentQuery() {
+    const query = getQueryText();
+    const logGroups = getSelectedLogGroups2();
+    const now = /* @__PURE__ */ new Date();
+    const name = `Query ${now.toISOString().slice(0, 19).replace("T", " ")}`;
+    let existingId = void 0;
+    const select = document.getElementById("savedSelect");
+    const selectIdx = parseInt(select?.value || "", 10);
+    if (!isNaN(selectIdx) && savedQueries[selectIdx]) {
+      existingId = savedQueries[selectIdx].id;
+    }
+    send({
+      type: "saveQuery",
+      data: {
+        id: existingId || Date.now().toString(),
+        name,
+        query,
+        logGroups
+      }
+    });
+  }
+  function deleteSelectedSaved() {
+    const select = document.getElementById("savedSelect");
+    if (!select) return;
+    const idx = parseInt(select.value, 10);
+    if (isNaN(idx)) return;
+    const query = savedQueries[idx];
+    if (query && confirm(`Delete saved query "${query.name}"?`)) {
+      send({ type: "deleteQuery", id: query.id });
+    }
+  }
+  function initSavedQueriesUI() {
+    const loadBtn = document.getElementById("loadSavedBtn");
+    const saveBtn = document.getElementById("saveQueryBtn");
+    const deleteBtn = document.getElementById("deleteSavedBtn");
+    const select = document.getElementById("savedSelect");
+    if (loadBtn) {
+      loadBtn.addEventListener("click", loadSavedQuery);
+    }
+    if (saveBtn) {
+      saveBtn.addEventListener("click", saveCurrentQuery);
+    }
+    if (deleteBtn) {
+      deleteBtn.addEventListener("click", deleteSelectedSaved);
+    }
+    if (select) {
+      select.addEventListener("change", loadSavedQuery);
+    }
+  }
+
+  // src/webview/components/controls/RunButton.ts
+  var RunButton = class {
+    constructor() {
+      this.element = document.getElementById("runBtn");
+      this.labelElement = this.element?.querySelector(".run-btn-label") ?? null;
+    }
+    /**
+     * Set button to running state (shows "Cancel Query").
+     */
+    setRunning() {
+      if (!this.element) return;
+      this.element.setAttribute("data-state", "running");
+      this.element.disabled = false;
+      if (this.labelElement) {
+        this.labelElement.textContent = "Cancel Query";
+      }
+    }
+    /**
+     * Set button to idle state (shows "Run Query").
+     */
+    setIdle() {
+      if (!this.element) return;
+      this.element.setAttribute("data-state", "");
+      this.element.disabled = false;
+      if (this.labelElement) {
+        this.labelElement.textContent = "Run Query";
+      }
+    }
+    /**
+     * Set button to aborting state (disabled, shows "Cancelling Query...").
+     */
+    setAborting() {
+      if (!this.element) return;
+      this.element.setAttribute("data-state", "aborting");
+      this.element.disabled = true;
+      if (this.labelElement) {
+        this.labelElement.textContent = "Cancelling Query...";
+      }
+    }
+    /**
+     * Attach a click handler.
+     */
+    onClick(handler) {
+      this.element?.addEventListener("click", handler);
+    }
+    /**
+     * Get the current state of the button.
+     */
+    getState() {
+      if (!this.element) return null;
+      const state2 = this.element.getAttribute("data-state");
+      if (state2 === "running") return "running";
+      if (state2 === "aborting") return "aborting";
+      return "idle";
+    }
+    /**
+     * Check if element exists in DOM.
+     */
+    exists() {
+      return this.element !== null;
+    }
+  };
+
+  // src/webview/components/controls/RegionInput.ts
+  var RegionInput = class {
+    constructor() {
+      this.element = document.getElementById("region");
+    }
+    /**
+     * Get the current region value (trimmed).
+     */
+    getValue() {
+      return this.element?.value.trim() ?? "us-east-2";
+    }
+    /**
+     * Set the region value.
+     */
+    setValue(value) {
+      if (this.element) {
+        this.element.value = value;
+      }
+    }
+    /**
+     * Attach a change event handler.
+     */
+    onChange(handler) {
+      this.element?.addEventListener("change", (e) => {
+        handler(e.target.value);
+      });
+    }
+    /**
+     * Check if element exists in DOM.
+     */
+    exists() {
+      return this.element !== null;
+    }
+  };
+
+  // src/webview/core/queryHandlers.ts
+  function initQueryHandlers() {
+    on("queryPartialResult", (msg) => {
+      appendPartialResults(msg.data);
+      renderTabs();
+    });
+    on("queryResult", (msg) => {
+      renderResults(msg.data);
+      initFiltersForNewResults();
+      scheduleSearchRerun();
+      setRunningQueryTab(null);
+      renderTabs();
+      const runButton = new RunButton();
+      runButton.setIdle();
+    });
+    on("queryError", (msg) => {
+      setStatus(`Error: ${msg.error}`);
+      const s = getState();
+      const targetTabId = s.runningQueryTabId ?? s.activeTabId;
+      if (targetTabId != null) {
+        setTabError(s, targetTabId, msg.error);
+      }
+      setRunningQueryTab(null);
+      renderTabs();
+      const runButton = new RunButton();
+      runButton.setIdle();
+    });
+    on("queryStatus", (msg) => {
+      setStatus(msg.data.status);
+      const s = getState();
+      const targetTabId = s.runningQueryTabId ?? s.activeTabId;
+      if (targetTabId != null) {
+        setTabStatus(s, targetTabId, msg.data.status);
+      }
+      if (/Complete|Cancel|Abort|Stop/i.test(msg.data.status)) {
+        setRunningQueryTab(null);
+        renderTabs();
+        const runButton = new RunButton();
+        runButton.setIdle();
+      }
+    });
+    on("favorites", (msg) => {
+      renderFavorites(msg.data);
+      updateStarButtons2();
+    });
+    on("savedQueries", (msg) => {
+      renderSavedQueries(msg.data, msg.source, msg.error);
+    });
+    on("logGroupsList", (msg) => {
+      renderLogGroups(msg.data);
+    });
+    on("logGroupsListError", (msg) => {
+      setStatus("\u274C List error: " + msg.error);
+    });
+    on("toggleComment", () => {
+      toggleCommentInQueryEditor();
+    });
+    on("lastQuery", (msg) => {
+      if (msg.query) {
+        setQueryText(msg.query);
+      }
+    });
+  }
+
+  // src/webview/features/timeRange/timeRange.ts
+  var relativeValue = 1;
+  var relativeUnit = "hours";
+  function currentTimeRange() {
+    const activeBtn = document.querySelector(".mode-btn.active");
+    const mode = activeBtn ? activeBtn.dataset.mode : "relative";
+    if (mode === "absolute") {
+      return getAbsoluteTimeRange();
+    } else {
+      return getRelativeTimeRange();
+    }
+  }
+  function getAbsoluteTimeRange() {
+    const startDate = document.getElementById("startDate")?.value;
+    const startTime = document.getElementById("startTime")?.value;
+    const endDate = document.getElementById("endDate")?.value;
+    const endTime = document.getElementById("endTime")?.value;
+    if (!startDate || !startTime) {
+      throw new Error("Start date and time are required for absolute time range");
+    }
+    if (!endDate || !endTime) {
+      throw new Error("End date and time are required for absolute time range");
+    }
+    const startStr = `${startDate}T${startTime}Z`;
+    const endStr = `${endDate}T${endTime}Z`;
+    const startMs = new Date(startStr).getTime();
+    const endMs = new Date(endStr).getTime();
+    if (isNaN(startMs)) {
+      throw new Error("Invalid start date/time format");
+    }
+    if (isNaN(endMs)) {
+      throw new Error("Invalid end date/time format");
+    }
+    if (startMs >= endMs) {
+      throw new Error("Start time must be before end time");
+    }
+    return {
+      start: startMs,
+      end: endMs
+    };
+  }
+  function getRelativeTimeRange() {
+    const unitMultipliers = {
+      minutes: 60 * 1e3,
+      hours: 60 * 60 * 1e3,
+      days: 24 * 60 * 60 * 1e3
+    };
+    const ms = relativeValue * (unitMultipliers[relativeUnit] || unitMultipliers.hours);
+    return { start: Date.now() - ms, end: Date.now() };
+  }
+  function toggleTimeMode() {
+    const activeBtn = document.querySelector(".mode-btn.active");
+    const mode = activeBtn ? activeBtn.dataset.mode : "relative";
+    const relativeInputs = Array.from(document.querySelectorAll(".relative-time"));
+    const absoluteInputs = Array.from(document.querySelectorAll(".absolute-time"));
+    if (mode === "relative") {
+      relativeInputs.forEach((el) => el.style.display = "");
+      absoluteInputs.forEach((el) => el.style.display = "none");
+    } else {
+      relativeInputs.forEach((el) => el.style.display = "none");
+      absoluteInputs.forEach((el) => el.style.display = "");
+    }
+  }
+  function setDateTimeToNow(which) {
+    const now = /* @__PURE__ */ new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+    const timeStr = now.toISOString().slice(11, 19);
+    if (which === "start") {
+      const startDateEl = document.getElementById("startDate");
+      const startTimeEl = document.getElementById("startTime");
+      if (startDateEl) startDateEl.value = dateStr;
+      if (startTimeEl) startTimeEl.value = timeStr;
+    } else {
+      const endDateEl = document.getElementById("endDate");
+      const endTimeEl = document.getElementById("endTime");
+      if (endDateEl) endDateEl.value = dateStr;
+      if (endTimeEl) endTimeEl.value = timeStr;
+    }
+  }
+  function copyStartToEnd() {
+    const startDate = document.getElementById("startDate")?.value;
+    const startTime = document.getElementById("startTime")?.value;
+    const endDateEl = document.getElementById("endDate");
+    const endTimeEl = document.getElementById("endTime");
+    if (endDateEl) endDateEl.value = startDate;
+    if (endTimeEl) endTimeEl.value = startTime;
+  }
+  function updateDateTimeMax() {
+    const now = /* @__PURE__ */ new Date();
+    const maxDate = now.toISOString().slice(0, 10);
+    const maxTime = now.toISOString().slice(11, 19);
+    const startDateEl = document.getElementById("startDate");
+    const endDateEl = document.getElementById("endDate");
+    const startTimeEl = document.getElementById("startTime");
+    const endTimeEl = document.getElementById("endTime");
+    if (startDateEl) startDateEl.max = maxDate;
+    if (endDateEl) endDateEl.max = maxDate;
+    if (startTimeEl) startTimeEl.max = maxTime;
+    if (endTimeEl) endTimeEl.max = maxTime;
+  }
+  function parsePastedDate(str) {
+    let s = str.trim();
+    if (!s) return null;
+    s = s.replace(/^["'`]|["'`]$/g, "");
+    if (/^\d{10}$/.test(s)) {
+      const secs = parseInt(s, 10);
+      return new Date(secs * 1e3);
+    }
+    if (/^\d{13}$/.test(s)) {
+      const ms = parseInt(s, 10);
+      return new Date(ms);
+    }
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+      if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) {
+        s += "Z";
+      }
+      s = s.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+      const d2 = new Date(s);
+      if (!isNaN(d2.getTime())) return d2;
+    }
+    if (/^\d{4}-\d{2}-\d{2} /.test(s)) {
+      let iso = s.replace(" ", "T");
+      if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(iso)) iso += "Z";
+      iso = iso.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+      const d2 = new Date(iso);
+      if (!isNaN(d2.getTime())) return d2;
+    }
+    if (/^\d{4}[/-]\d{1,2}[/-]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/.test(s)) {
+      const parts = s.split(/[ T]/);
+      const datePart = parts[0];
+      const [y, m, dDay] = datePart.split(/[/-]/).map((x) => parseInt(x, 10));
+      let hour = 0, min = 0, sec = 0;
+      if (parts[1]) {
+        const timeParts = parts[1].split(":").map((x) => parseInt(x, 10));
+        hour = timeParts[0] || 0;
+        min = timeParts[1] || 0;
+        sec = timeParts[2] || 0;
+      }
+      if (m >= 1 && m <= 12 && dDay >= 1 && dDay <= 31) {
+        return new Date(Date.UTC(y, m - 1, dDay, hour, min, sec));
+      }
+    }
+    const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ ,T]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM|am|pm))?)?$/);
+    if (slash) {
+      let a = parseInt(slash[1], 10);
+      let b = parseInt(slash[2], 10);
+      const year = parseInt(slash[3], 10);
+      let hour = slash[4] ? parseInt(slash[4], 10) : 0;
+      const minute = slash[5] ? parseInt(slash[5], 10) : 0;
+      const second = slash[6] ? parseInt(slash[6], 10) : 0;
+      const ampm = slash[7];
+      let month, day;
+      if (a > 12) {
+        day = a;
+        month = b;
+      } else if (b > 12) {
+        month = a;
+        day = b;
+      } else {
+        month = a;
+        day = b;
+      }
+      if (ampm) {
+        const upper = ampm.toUpperCase();
+        if (upper === "PM" && hour < 12) hour += 12;
+        if (upper === "AM" && hour === 12) hour = 0;
+      }
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+      }
+    }
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d;
+    return null;
+  }
+  function formatDateUTC(d) {
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+  function formatTimeUTC(d) {
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mm = String(d.getUTCMinutes()).padStart(2, "0");
+    const ss = String(d.getUTCSeconds()).padStart(2, "0");
+    return `${hh}:${mm}:${ss}`;
+  }
+  function setParsedDate(which, dateObj, setStatusFn) {
+    const dateEl = document.getElementById(which + "Date");
+    const timeEl = document.getElementById(which + "Time");
+    if (!dateEl || !timeEl) return;
+    dateEl.value = formatDateUTC(dateObj);
+    timeEl.value = formatTimeUTC(dateObj);
+    if (setStatusFn) setStatusFn("\u2713 Parsed pasted date/time");
+  }
+  function handleDatePaste(e, which, setStatusFn) {
+    const text = e.clipboardData?.getData("text") || "";
+    if (!text.trim()) return;
+    const parsed = parsePastedDate(text.trim());
+    if (!parsed) {
+      const fallback = new Date(text.trim());
+      if (isNaN(fallback.getTime())) return;
+      setParsedDate(which, fallback, setStatusFn);
+      e.preventDefault();
+      return;
+    }
+    setParsedDate(which, parsed, setStatusFn);
+    e.preventDefault();
+  }
+  function attachDatePasteHandlers(setStatusFn) {
+    ["start", "end"].forEach((which) => {
+      const dateEl = document.getElementById(which + "Date");
+      const timeEl = document.getElementById(which + "Time");
+      if (dateEl) dateEl.addEventListener("paste", (e) => handleDatePaste(e, which, setStatusFn));
+      if (timeEl) timeEl.addEventListener("paste", (e) => handleDatePaste(e, which, setStatusFn));
+    });
+  }
+  function initTimeRangeUI(setStatusFn) {
+    Array.from(document.querySelectorAll(".mode-btn")).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        Array.from(document.querySelectorAll(".mode-btn")).forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        toggleTimeMode();
+      });
+    });
+    const relativeValueInput = document.getElementById("relativeValue");
+    Array.from(document.querySelectorAll(".relative-quick-btn")).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        Array.from(document.querySelectorAll(".relative-quick-btn")).forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        relativeValue = parseInt(btn.dataset.value || "1", 10);
+        if (relativeValueInput) {
+          relativeValueInput.value = "";
+          relativeValueInput.classList.remove("active");
+        }
+      });
+    });
+    if (relativeValueInput) {
+      relativeValueInput.addEventListener("input", (e) => {
+        const val = parseInt(e.target.value, 10);
+        if (val && val >= 1) {
+          relativeValue = val;
+          Array.from(document.querySelectorAll(".relative-quick-btn")).forEach((b) => b.classList.remove("active"));
+          relativeValueInput.classList.add("active");
+        } else {
+          relativeValueInput.classList.remove("active");
+        }
+      });
+      relativeValueInput.addEventListener("click", (e) => {
+        e.target.select();
+      });
+      relativeValueInput.addEventListener("focus", (e) => {
+        e.target.select();
+      });
+    }
+    Array.from(document.querySelectorAll(".unit-btn")).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        Array.from(document.querySelectorAll(".unit-btn")).forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        relativeUnit = btn.dataset.unit;
+      });
+    });
+    const startNowBtn = document.getElementById("startNowBtn");
+    const endNowBtn = document.getElementById("endNowBtn");
+    if (startNowBtn) {
+      startNowBtn.addEventListener("click", () => setDateTimeToNow("start"));
+    }
+    if (endNowBtn) {
+      endNowBtn.addEventListener("click", () => setDateTimeToNow("end"));
+    }
+    const copyBtn = document.getElementById("copyStartToEnd");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", copyStartToEnd);
+    }
+    attachDatePasteHandlers(setStatusFn);
+    updateDateTimeMax();
+    toggleTimeMode();
+  }
+
+  // src/webview/features/query/execution.ts
+  function getSelectedLogGroups3() {
+    const container = document.getElementById("lgList");
+    if (!container) return [];
+    return Array.from(container.querySelectorAll(".lg-item.selected")).map((item) => item.dataset.name || "").filter(Boolean);
+  }
+  function formatTimestamp(ts) {
+    const d = new Date(ts);
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    const s = String(d.getSeconds()).padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  }
+  function abortQuery() {
+    send({ type: "abortQuery" });
+    setStatus("\u23F8 Cancelling query...");
+    const runButton = new RunButton();
+    runButton.setAborting();
+  }
+  function runQuery() {
+    let range;
+    try {
+      range = currentTimeRange();
+    } catch (e) {
+      setStatus(`\u26A0 ${e.message || "Invalid time range"}`);
+      const absPanel = document.querySelector(".absolute-time");
+      if (absPanel) {
+        absPanel.classList.remove("cwlv-pulse-attention");
+        void absPanel.offsetWidth;
+        absPanel.classList.add("cwlv-pulse-attention");
+        setTimeout(() => absPanel.classList.remove("cwlv-pulse-attention"), 1400);
+      }
+      return;
+    }
+    const logGroups = getSelectedLogGroups3();
+    const regionInput = new RegionInput();
+    const region = regionInput.getValue();
+    const query = getQueryText();
+    if (!logGroups.length) {
+      setStatus("\u26A0 Select at least one log group");
+      pulseLogGroupsAttention();
+      return;
+    }
+    if (!query.trim()) {
+      setStatus("\u26A0 Query string is empty");
+      return;
+    }
+    const s = getState();
+    const active = s.activeTabId != null ? s.tabs.find((t) => t.id === s.activeTabId) : void 0;
+    const nowName = `Query ${formatTimestamp(Date.now())}`;
+    if (!active) {
+      setStatus("\u26A0 No active tab");
+      return;
+    }
+    if (!active.isCustomName) {
+      setTabName(s, active.id, nowName, false);
+    }
+    resetTabForNewQuery(s, active.id, query, logGroups, region, { start: range.start, end: range.end });
+    renderTabs();
+    setRunningQueryTab(active.id);
+    setStatus("Running query...");
+    const runButton = new RunButton();
+    runButton.setRunning();
+    send({ type: "runQuery", data: { logGroups, region, query, startTime: range.start, endTime: range.end } });
+  }
+  function initQueryButtons() {
+    const runBtn = document.getElementById("runBtn");
+    if (runBtn && !runBtn.hasAttribute("data-query-bound")) {
+      runBtn.setAttribute("data-query-bound", "true");
+      runBtn.addEventListener("click", () => {
+        const state2 = runBtn.getAttribute("data-state");
+        if (state2 === "running") abortQuery();
+        else runQuery();
+      });
+    }
+  }
+
+  // src/webview/bootstrap.ts
+  function init() {
+    initMessageListener();
+    initTabsModel();
+    initTabsEvents();
+    initQueryHandlers();
+    initQueryButtons();
+    initSearchEvents();
+    initTimeRangeUI(setStatus);
+    initSavedQueriesUI();
+    initLogGroupsUI();
+    initQueryEditorUI();
+    clearAllFilters();
+    const s = getState();
+    if (s.activeTabId != null) {
+      const resultsContainer = document.getElementById("results-container");
+      if (resultsContainer) {
+        const div = document.createElement("div");
+        div.id = `results-${s.activeTabId}`;
+        div.className = "results active";
+        div.dataset.tabId = String(s.activeTabId);
+        resultsContainer.appendChild(div);
+      }
+    }
+    renderTabs();
+    setStatus("Ready");
+    try {
+      send({ type: "getSavedQueries" });
+      send({ type: "getFavorites" });
+    } catch {
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
