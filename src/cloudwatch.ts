@@ -1,4 +1,4 @@
-import { CloudWatchLogsClient, StartQueryCommand, GetQueryResultsCommand, StopQueryCommand, DescribeLogGroupsCommand, DescribeQueryDefinitionsCommand, PutQueryDefinitionCommand, DeleteQueryDefinitionCommand } from '@aws-sdk/client-cloudwatch-logs';
+import { CloudWatchLogsClient, StartQueryCommand, GetQueryResultsCommand, StopQueryCommand, DescribeLogGroupsCommand, DescribeQueryDefinitionsCommand, PutQueryDefinitionCommand, DeleteQueryDefinitionCommand, DescribeQueriesCommand } from '@aws-sdk/client-cloudwatch-logs';
 
 export interface InsightsQueryParams {
   logGroupNames: string[];
@@ -69,7 +69,6 @@ export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?
 
   const queryId = startResp.queryId;
   const start = Date.now();
-  let lastRowCount = 0; // Track how many rows we've already sent
   
   // Register abort handler to call StopQuery on AWS side
   const abortHandler = async () => {
@@ -84,45 +83,57 @@ export async function runInsightsQuery(params: InsightsQueryParams, abortSignal?
   }
   
   try {
+    // Poll for status using DescribeQueries (lightweight, doesn't return all data)
     while (true) {
       if (abortSignal?.aborted) {
         throw new Error('Query aborted');
       }
-      const resp = await client.send(new GetQueryResultsCommand({ queryId }));
       
-      // Process current results
-      const rows = (resp.results || []).map(r => ({
-        fields: (r || []).map(f => ({ field: f.field || '', value: f.value || '' }))
+      const apiCallStart = Date.now();
+      const describeResp = await client.send(new DescribeQueriesCommand({ 
+        logGroupName: logGroupNames[0],
+        maxResults: 10
       }));
+      const apiCallDuration = Date.now() - apiCallStart;
       
-      // Derive field order from query
-      const discovered = new Set<string>();
-      rows.forEach(r => r.fields.forEach(f => { if (f.field) discovered.add(f.field); }));
-      const explicit = extractFieldsOrder(queryString);
-      const ordered = [...explicit, ...Array.from(discovered).filter(f => !explicit.includes(f))];
+      // Find our query in the results
+      const queryInfo = describeResp.queries?.find(q => q.queryId === queryId);
       
-      // Send partial results if we have new rows and a callback
-      if (onPartialResults && rows.length > lastRowCount) {
-        const newRows = rows.slice(lastRowCount);
-        onPartialResults({
-          rows: newRows,
-          fieldOrder: ordered,
-          status: resp.status || 'Running'
-        });
-        lastRowCount = rows.length;
+      if (!queryInfo) {
+        throw new Error('Query not found in DescribeQueries results');
       }
       
-      if (resp.status === 'Complete' || resp.status === 'Failed' || resp.status === 'Cancelled' || resp.status === 'Timeout') {
+      const isTerminal = queryInfo.status === 'Complete' || queryInfo.status === 'Failed' || 
+                         queryInfo.status === 'Cancelled' || queryInfo.status === 'Timeout';
+      
+      if (isTerminal) {
+        // Query finished - fetch results once
+        const resultsStart = Date.now();
+        const resp = await client.send(new GetQueryResultsCommand({ queryId }));
+        const resultsDuration = Date.now() - resultsStart;
+        
+        const rows = (resp.results || []).map(r => ({
+          fields: (r || []).map(f => ({ field: f.field || '', value: f.value || '' }))
+        }));
+        
+        // Derive field order from query
+        const discovered = new Set<string>();
+        rows.forEach(r => r.fields.forEach(f => { if (f.field) discovered.add(f.field); }));
+        const explicit = extractFieldsOrder(queryString);
+        const ordered = [...explicit, ...Array.from(discovered).filter(f => !explicit.includes(f))];
+        
         return {
           rows,
           statistics: resp.statistics as Record<string, unknown> | undefined,
-          status: resp.status || 'Unknown',
+          status: queryInfo.status || 'Unknown',
           fieldOrder: ordered
         };
       }
+      
       if (Date.now() - start > timeoutMs) {
         throw new Error('Query timeout exceeded');
       }
+      
       await new Promise(r => setTimeout(r, pollIntervalMs));
     }
   } finally {

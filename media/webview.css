@@ -1063,12 +1063,32 @@ button:hover {
   text-overflow: ellipsis;
 }
 
-.results {
+.results-container {
   flex: 1;
-  overflow: auto;
+  position: relative;
+  overflow: hidden;
   border: 1px solid var(--vscode-editorGroup-border);
   border-top: none;
   border-radius: 0 0 6px 6px;
+}
+
+.results {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: auto;
+  z-index: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+
+.results.active {
+  z-index: 1;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 table {

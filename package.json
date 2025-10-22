@@ -52,11 +52,6 @@
             "default": "us-east-2",
             "description": "Default AWS region for CloudWatch Logs queries."
         },
-        "cloudwatchLogsViewer.queryPollIntervalMs": {
-          "type": "number",
-          "default": 1000,
-          "description": "Polling interval in milliseconds for CloudWatch Logs Insights query status."
-        },
         "cloudwatchLogsViewer.queryTimeoutMs": {
           "type": "number",
           "default": 60000,

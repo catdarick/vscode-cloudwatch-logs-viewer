@@ -198,7 +198,6 @@ function removeFavorite(context: vscode.ExtensionContext, name: string, region: 
 async function handleRunQuery(data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number }, context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration();
   const region = data.region || config.get('cloudwatchLogsViewer.defaultRegion') as string;
-  const pollIntervalMs = config.get('cloudwatchLogsViewer.queryPollIntervalMs') as number;
   const timeoutMs = config.get('cloudwatchLogsViewer.queryTimeoutMs') as number;
   const startTime = Math.floor(data.startTime / 1000);
   const endTime = Math.floor(data.endTime / 1000);
@@ -241,12 +240,8 @@ async function handleRunQuery(data: { logGroups: string[]; region?: string; quer
       startTime,
       endTime,
       region,
-      pollIntervalMs,
-      timeoutMs,
-      onPartialResults: (partial) => {
-        // Stream partial results to UI as they arrive
-        post({ type: 'queryPartialResult', data: { ...partial, hiddenFields } });
-      }
+      pollIntervalMs: 300, // Fast polling with lightweight DescribeQueries
+      timeoutMs
     }, currentQueryAbortController.signal);
     // Attach hiddenFields metadata if we injected @message so webview can hide column but still show in detail
     post({ type: 'queryResult', data: { ...result, hiddenFields } });
@@ -457,7 +452,7 @@ function getHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
             </div>
           </div>
         </div>
-        <div id="results" class="results"></div>
+        <div id="results-container" class="results-container"></div>
       </section>
     </main>
   </div>

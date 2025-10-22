@@ -55,7 +55,8 @@ let runningQueryTabId = null; // Track which tab is running a query
 //   searchIndex: number,
 //   columnFilters: object,
 //   expandedRows: Set,
-//   scrollPosition: number
+//   scrollPosition: number,
+//   status: string
 // }
 
 // Event listeners
@@ -894,10 +895,36 @@ function createTab(options = {}) {
         columnFilters: {},
         expandedRows: new Set(),
         scrollPosition: 0,
-        isStreaming: options.isStreaming || false
+        isStreaming: options.isStreaming || false,
+        status: ''
     };
     tabs.push(tab);
+    
+    // Create a results container for this tab
+    createTabResultsContainer(tab.id);
+    
     return tab;
+}
+
+function createTabResultsContainer(tabId) {
+    const container = document.getElementById('results-container');
+    if (!container) return;
+    
+    const resultsDiv = document.createElement('div');
+    resultsDiv.id = `results-${tabId}`;
+    resultsDiv.className = 'results';
+    resultsDiv.dataset.tabId = tabId;
+    
+    container.appendChild(resultsDiv);
+}
+
+function getTabResultsContainer(tabId) {
+    return document.getElementById(`results-${tabId}`);
+}
+
+function getActiveResultsContainer() {
+    const activeTab = getActiveTab();
+    return activeTab ? getTabResultsContainer(activeTab.id) : null;
 }
 
 function formatTimestamp(timestamp) {
@@ -959,6 +986,10 @@ function saveCurrentTabState() {
     // Save current results
     tab.results = currentResults;
     
+    // Save current status
+    const statusEl = document.getElementById('status');
+    tab.status = statusEl ? statusEl.textContent : '';
+    
     // Save search state
     const searchInput = document.getElementById('searchInput');
     tab.searchQuery = searchInput ? searchInput.value : '';
@@ -970,20 +1001,56 @@ function saveCurrentTabState() {
         tab.columnFilters[fieldName] = new Set(allowedValues);
     }
     
-    // Save scroll position
-    const resultsDiv = document.getElementById('results');
+    // Save scroll position from the tab's own results container
+    const resultsDiv = getTabResultsContainer(tab.id);
     tab.scrollPosition = resultsDiv ? resultsDiv.scrollTop : 0;
     
     // Save expanded rows
-    const table = resultsDiv ? resultsDiv.querySelector('table tbody') : null;
-    if (table) {
-        tab.expandedRows = new Set();
-        table.querySelectorAll('tr[data-row-index]').forEach(tr => {
-            const next = tr.nextSibling;
-            if (next && next.classList && next.classList.contains('detail-row')) {
-                tab.expandedRows.add(tr.dataset.rowIndex);
-            }
-        });
+    if (resultsDiv) {
+        const table = resultsDiv.querySelector('table tbody');
+        if (table) {
+            tab.expandedRows = new Set();
+            table.querySelectorAll('tr[data-row-index]').forEach(tr => {
+                const next = tr.nextSibling;
+                if (next && next.classList && next.classList.contains('detail-row')) {
+                    tab.expandedRows.add(tr.dataset.rowIndex);
+                }
+            });
+        }
+    }
+}
+
+function restoreTabUIState(tab) {
+    if (!tab) return;
+    
+    // Update currentResults reference
+    currentResults = tab.results;
+    
+    // Restore status
+    setStatus(tab.status || '');
+    
+    // Restore column filters (deep clone the Sets)
+    activeFilters = {};
+    if (tab.columnFilters) {
+        for (const [fieldName, allowedValues] of Object.entries(tab.columnFilters)) {
+            activeFilters[fieldName] = new Set(allowedValues);
+        }
+    }
+    
+    // Update filter indicators
+    updateFilterIndicators();
+    
+    // Restore search state
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) {
+        searchInput.value = tab.searchQuery || '';
+        // Note: search highlighting is already in the DOM, no need to re-run
+    }
+    
+    // Restore scroll position
+    const resultsDiv = getTabResultsContainer(tab.id);
+    if (resultsDiv && tab.scrollPosition !== undefined) {
+        resultsDiv.scrollTop = tab.scrollPosition;
     }
 }
 
@@ -1005,7 +1072,7 @@ function restoreTabState(tab) {
         applyColumnFilters();
         updateFilterIndicators(); // Update column header filter button states
     } else {
-        const resultsDiv = document.getElementById('results');
+        const resultsDiv = getTabResultsContainer(tab.id);
         if (resultsDiv) resultsDiv.innerHTML = '';
         
         // Clear filters when no results
@@ -1024,7 +1091,7 @@ function restoreTabState(tab) {
     // Restore scroll position and expanded rows only if we have results
     if (tab.results) {
         setTimeout(() => {
-            const resultsDiv = document.getElementById('results');
+            const resultsDiv = getTabResultsContainer(tab.id);
             if (resultsDiv) resultsDiv.scrollTop = tab.scrollPosition || 0;
             
             // Restore expanded rows
@@ -1049,17 +1116,37 @@ function restoreTabState(tab) {
 function switchToTab(tabId) {
     if (activeTabId === tabId) return;
     
-    // Save current tab state
+    // Save current tab state (scroll position, expanded rows, search state)
     saveCurrentTabState();
+    
+    // Hide all tab result containers
+    const allResults = document.querySelectorAll('.results');
+    allResults.forEach(r => r.classList.remove('active'));
+    
+    // Show the target tab's result container
+    const targetResults = getTabResultsContainer(tabId);
+    if (targetResults) {
+        targetResults.classList.add('active');
+    }
     
     // Switch active tab
     activeTabId = tabId;
     
-    // Restore new tab state
+    // Get the tab we're switching to
     const tab = getActiveTab();
-    restoreTabState(tab);
     
-    // Update UI
+    // Check if tab has results but they haven't been rendered yet
+    // (this happens when a query completes in a background tab)
+    const hasTable = targetResults && targetResults.querySelector('table');
+    if (tab && tab.results && targetResults && !hasTable) {
+        // Render results for the first time (background query completed)
+        restoreTabState(tab);
+    } else {
+        // Just restore UI state (results already in DOM or no results)
+        restoreTabUIState(tab);
+    }
+    
+    // Update tab bar UI
     renderTabs();
 }
 
@@ -1168,6 +1255,12 @@ function closeTab(tabId) {
     const tabIndex = tabs.findIndex(t => t.id === tabId);
     if (tabIndex === -1) return;
     
+    // Remove the tab's results container from the DOM
+    const resultsContainer = getTabResultsContainer(tabId);
+    if (resultsContainer) {
+        resultsContainer.remove();
+    }
+    
     // Remove tab
     tabs.splice(tabIndex, 1);
     
@@ -1181,6 +1274,13 @@ function closeTab(tabId) {
             // No tabs left, create a new one
             const newTab = createTab();
             activeTabId = newTab.id;
+            
+            // Make the new tab's results container active
+            const resultsContainer = getTabResultsContainer(newTab.id);
+            if (resultsContainer) {
+                resultsContainer.classList.add('active');
+            }
+            
             renderTabs();
             restoreTabState(newTab);
         }
@@ -1195,11 +1295,12 @@ function createNewTab() {
     
     // Create new tab
     const newTab = createTab();
-    activeTabId = newTab.id;
     
-    // Clear results and restore empty state
+    // Switch to the new tab (this handles showing/hiding properly)
+    switchToTab(newTab.id);
+    
+    // Clear results (the new tab is empty)
     restoreTabState(newTab);
-    renderTabs();
 }
 
 function renameTab(tabId) {
@@ -1362,6 +1463,12 @@ function runQuery() {
             isStreaming: true
         });
         activeTabId = targetTab.id;
+        
+        // Ensure the new tab's results container is active
+        const resultsContainer = getTabResultsContainer(targetTab.id);
+        if (resultsContainer) {
+            resultsContainer.classList.add('active');
+        }
     } else {
         // Overwrite current tab with new query
         targetTab = currentTab;
@@ -1381,8 +1488,8 @@ function runQuery() {
         targetTab.expandedRows = new Set();
         targetTab.scrollPosition = 0;
         
-        // Clear current results display
-        const resultsDiv = document.getElementById('results');
+        // Clear current results display - target the specific tab's container
+        const resultsDiv = getTabResultsContainer(targetTab.id);
         if (resultsDiv) resultsDiv.innerHTML = '';
         currentResults = null;
     }
@@ -1433,7 +1540,9 @@ function appendPartialResults(partialPayload) {
     currentResults.fieldOrder = partialPayload.fieldOrder || currentResults.fieldOrder;
     currentResults.hiddenFields = partialPayload.hiddenFields || currentResults.hiddenFields;
     
-    const container = document.getElementById('results');
+    const container = getActiveResultsContainer();
+    if (!container) return;
+    
     let table = container.querySelector('table');
     let tbody = table ? table.querySelector('tbody') : null;
     
@@ -1523,7 +1632,12 @@ function appendPartialResults(partialPayload) {
 
 function renderResults(payload, skipClearFilters = false) {
     currentResults = payload;
-    const container = document.getElementById('results');
+    const activeTab = getActiveTab();
+    if (!activeTab) return;
+    
+    const container = getTabResultsContainer(activeTab.id);
+    if (!container) return;
+    
     container.innerHTML = '';
     // Results changed – invalidate any cached row references used by search
     invalidateRowCache();
@@ -1827,7 +1941,10 @@ function showColumnFilter(fieldName, buttonElement) {
 
 function getColumnValueCounts(fieldName) {
     const valueCountMap = new Map();
-    const rows = document.querySelectorAll('#results tbody tr:not(.detail-row)');
+    const container = getActiveResultsContainer();
+    if (!container) return valueCountMap;
+    
+    const rows = container.querySelectorAll('tbody tr:not(.detail-row)');
     
     rows.forEach(row => {
         const cell = row.querySelector(`td[data-field="${fieldName}"]`);
@@ -1844,7 +1961,10 @@ function toggleFilterValue(fieldName, value) {
     if (!activeFilters[fieldName]) {
         // First filter on this column - start with all values except this one
         const allValues = new Set();
-        const rows = document.querySelectorAll('#results tbody tr:not(.detail-row)');
+        const container = getActiveResultsContainer();
+        if (!container) return;
+        
+        const rows = container.querySelectorAll('tbody tr:not(.detail-row)');
         rows.forEach(row => {
             const cell = row.querySelector(`td[data-field="${fieldName}"]`);
             if (cell) {
@@ -1872,7 +1992,10 @@ function toggleFilterValue(fieldName, value) {
 }
 
 function applyColumnFilters() {
-    const rows = document.querySelectorAll('#results tbody tr:not(.detail-row)');
+    const container = getActiveResultsContainer();
+    if (!container) return;
+    
+    const rows = container.querySelectorAll('tbody tr:not(.detail-row)');
     
     rows.forEach(row => {
         let shouldShow = true;
@@ -1921,12 +2044,22 @@ function applyColumnFilters() {
     // Update status to reflect filtered row count
     const rowCountText = getRowCountText();
     if (rowCountText) {
-        setStatus(`✓ Query Complete${rowCountText}`);
+        const statusText = `✓ Query Complete${rowCountText}`;
+        setStatus(statusText);
+        
+        // Save status to the active tab
+        const activeTab = getActiveTab();
+        if (activeTab) {
+            activeTab.status = statusText;
+        }
     }
 }
 
 function updateFilterIndicators() {
-    const headers = document.querySelectorAll('#results thead th[data-field]');
+    const container = getActiveResultsContainer();
+    if (!container) return;
+    
+    const headers = container.querySelectorAll('thead th[data-field]');
     
     headers.forEach(th => {
         const fieldName = th.dataset.field;
@@ -2199,7 +2332,10 @@ function resetSearchState() {
 function invalidateRowCache() { rowCache = null; resetSearchState(); }
 function buildRowCache() {
     if (rowCache) return rowCache;
-    const rows = document.querySelectorAll('#results tbody tr');
+    const container = getActiveResultsContainer();
+    if (!container) return [];
+    
+    const rows = container.querySelectorAll('tbody tr');
     rowCache = Array.from(rows)
         .filter(row => !row.classList.contains('detail-row')) // exclude expanded JSON detail rows from search indexing
         .map(row => {
@@ -2365,7 +2501,15 @@ function searchResults(preservePosition = false, force = false) {
                 currentSearchMatchIndex = 0;
                 highlightCurrentMatch();
             }
-            setStatus(`🔍 ${searchMatches.length} matches in ${matchedRowCount} rows`);
+            const statusText = `🔍 ${searchMatches.length} matches in ${matchedRowCount} rows`;
+            setStatus(statusText);
+            
+            // Save search status to the active tab
+            const activeTab = getActiveTab();
+            if (activeTab) {
+                activeTab.status = statusText;
+            }
+            
             setSearchBusy(false);
             previousMatchedRowIndices = newMatched;
             const tEnd = perf.now();
@@ -2424,7 +2568,14 @@ function highlightCurrentMatch() {
     match.mark.classList.add('current-match');
     match.mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-    setStatus(`🔍 Match ${currentSearchMatchIndex + 1}/${searchMatches.length}`);
+    const statusText = `🔍 Match ${currentSearchMatchIndex + 1}/${searchMatches.length}`;
+    setStatus(statusText);
+    
+    // Save search navigation status to the active tab
+    const activeTab = getActiveTab();
+    if (activeTab) {
+        activeTab.status = statusText;
+    }
 }
 
 function navigateSearchNext() {
@@ -2548,11 +2699,17 @@ window.addEventListener('message', (event) => {
                     if (label) label.textContent = 'Cancel Query';
                 }
                 // Clear results container when starting new query
-                const container = document.getElementById('results');
+                const container = getActiveResultsContainer();
                 if (container) container.innerHTML = '';
                 currentResults = { rows: [], fieldOrder: [], status: 'Running' };
                 invalidateRowCache();
                 clearAllFilters();
+                
+                // Save status to the active tab
+                const activeTab = getActiveTab();
+                if (activeTab) {
+                    activeTab.status = msg.data.status;
+                }
             } else if (msg.data.status === 'Aborted') {
                 const btn = document.getElementById('runBtn');
                 if (btn) {
@@ -2561,9 +2718,15 @@ window.addEventListener('message', (event) => {
                     const label = btn.querySelector('.run-btn-label');
                     if (label) label.textContent = 'Run Query';
                 }
-                setStatus('⏹ Query aborted');
-                // Mark the query tab as no longer streaming
+                const statusText = '⏹ Query aborted';
+                setStatus(statusText);
+                
+                // Save abort status to the query tab
                 if (runningQueryTabId) {
+                    const queryTab = tabs.find(t => t.id === runningQueryTabId);
+                    if (queryTab) {
+                        queryTab.status = statusText;
+                    }
                     setTabStreaming(runningQueryTabId, false);
                     runningQueryTabId = null;
                 }
@@ -2574,11 +2737,56 @@ window.addEventListener('message', (event) => {
             if (runningQueryTabId && activeTabId === runningQueryTabId) {
                 // Only update if we're viewing the tab that's running the query
                 appendPartialResults(msg.data);
-                // Update status with current row count
-                const rowCount = currentResults.rows ? currentResults.rows.length : 0;
-                setStatus(`Running query... (${rowCount} rows)`);
+                
+                // Check if this is a terminal status (query completed)
+                const isTerminal = msg.data.status && ['Complete', 'Failed', 'Cancelled', 'Timeout'].includes(msg.data.status);
+                const isFinalizing = msg.data.status === 'Finalizing';
+                
+                if (isTerminal) {
+                    // Query completed - update UI to idle state
+                    const btn = document.getElementById('runBtn');
+                    if (btn) {
+                        btn.setAttribute('data-state', 'idle');
+                        btn.disabled = false;
+                        const label = btn.querySelector('.run-btn-label');
+                        if (label) label.textContent = 'Run Query';
+                    }
+                    
+                    const rowCount = currentResults.rows ? currentResults.rows.length : 0;
+                    const statusText = `✓ Query ${msg.data.status} (${rowCount} rows)`;
+                    setStatus(statusText);
+                    
+                    const activeTab = getActiveTab();
+                    if (activeTab) {
+                        activeTab.status = statusText;
+                    }
+                    
+                    setTabStreaming(runningQueryTabId, false);
+                    runningQueryTabId = null;
+                } else if (isFinalizing) {
+                    // Show finalizing status
+                    const rowCount = currentResults.rows ? currentResults.rows.length : 0;
+                    const statusText = `Finalizing query... (${rowCount} rows)`;
+                    setStatus(statusText);
+                    
+                    const activeTab = getActiveTab();
+                    if (activeTab) {
+                        activeTab.status = statusText;
+                    }
+                } else {
+                    // Still running - update status with current row count
+                    const rowCount = currentResults.rows ? currentResults.rows.length : 0;
+                    const statusText = `Running query... (${rowCount} rows)`;
+                    setStatus(statusText);
+                    
+                    // Save status to the active tab
+                    const activeTab = getActiveTab();
+                    if (activeTab) {
+                        activeTab.status = statusText;
+                    }
+                }
             } else if (runningQueryTabId) {
-                // Save to the background tab
+                // Save to the background tab without updating status
                 const queryTab = tabs.find(t => t.id === runningQueryTabId);
                 if (queryTab) {
                     if (!queryTab.results || !queryTab.results.rows) {
@@ -2587,11 +2795,24 @@ window.addEventListener('message', (event) => {
                     queryTab.results.rows.push(...msg.data.rows);
                     queryTab.results.fieldOrder = msg.data.fieldOrder || queryTab.results.fieldOrder;
                     queryTab.results.hiddenFields = msg.data.hiddenFields || queryTab.results.hiddenFields;
-                    // Update tabs to show streaming row count
+                    
+                    // Check if this is a terminal status
+                    const isTerminal = msg.data.status && ['Complete', 'Failed', 'Cancelled', 'Timeout'].includes(msg.data.status);
+                    
+                    if (isTerminal) {
+                        // Query completed in background tab
+                        const rowCount = queryTab.results.rows.length;
+                        queryTab.status = `✓ Query ${msg.data.status} (${rowCount} rows)`;
+                        setTabStreaming(runningQueryTabId, false);
+                        runningQueryTabId = null;
+                    } else {
+                        // Update the background tab's status (but don't display it)
+                        const rowCount = queryTab.results.rows.length;
+                        queryTab.status = `Running query... (${rowCount} rows)`;
+                    }
+                    
+                    // Update tabs to show streaming row count or completion
                     renderTabs();
-                    // Update status with background tab row count
-                    const rowCount = queryTab.results.rows.length;
-                    setStatus(`Running query in background tab... (${rowCount} rows)`);
                 }
             }
             break;
@@ -2611,13 +2832,18 @@ window.addEventListener('message', (event) => {
                     queryTab.results = msg.data;
                     setTabStreaming(queryTab.id, false);
                     
-                    // Update status with row count
+                    // Update status with row count and save to the tab
                     const rowCount = msg.data.rows ? msg.data.rows.length : 0;
-                    setStatus(`✓ Query ${msg.data.status} (${rowCount} rows)`);
+                    const statusText = `✓ Query ${msg.data.status} (${rowCount} rows)`;
+                    queryTab.status = statusText;
                     
-                    // If we're viewing this tab, render the results
+                    // If we're viewing this tab, update the displayed status
                     if (activeTabId === runningQueryTabId) {
+                        setStatus(statusText);
                         renderResults(msg.data);
+                    } else {
+                        // Update tabs to show completion in background
+                        renderTabs();
                     }
                 }
                 
@@ -2625,8 +2851,10 @@ window.addEventListener('message', (event) => {
             }
             break;
         case 'queryError':
-            setStatus('❌ Error: ' + msg.error);
             {
+                const statusText = '❌ Error: ' + msg.error;
+                setStatus(statusText);
+                
                 const btn = document.getElementById('runBtn');
                 if (btn) {
                     btn.setAttribute('data-state', 'idle');
@@ -2634,8 +2862,13 @@ window.addEventListener('message', (event) => {
                     const label = btn.querySelector('.run-btn-label');
                     if (label) label.textContent = 'Run Query';
                 }
-                // Mark the query tab as no longer streaming
+                
+                // Save error status to the query tab
                 if (runningQueryTabId) {
+                    const queryTab = tabs.find(t => t.id === runningQueryTabId);
+                    if (queryTab) {
+                        queryTab.status = statusText;
+                    }
                     setTabStreaming(runningQueryTabId, false);
                     runningQueryTabId = null;
                 }
@@ -2669,6 +2902,12 @@ if (tabs.length === 0) {
     const firstTab = createTab({ name: 'Results' });
     activeTabId = firstTab.id;
     renderTabs();
+    
+    // Make the first tab's results container active
+    const firstResultsContainer = getTabResultsContainer(firstTab.id);
+    if (firstResultsContainer) {
+        firstResultsContainer.classList.add('active');
+    }
 }
 
 // Note: Previous logic collapsed log groups via a button id (lgCollapseBtn) that no longer exists.
