@@ -1473,6 +1473,7 @@
   function getTabResultsContainer(tabId) {
     return document.getElementById(`results-${tabId}`);
   }
+  var boundContainers = /* @__PURE__ */ new WeakSet();
   function renderResults(payload, skipClearFilters = false, forceTabId) {
     const s = getState();
     const targetTabId = forceTabId ?? s.activeTabId;
@@ -1496,8 +1497,11 @@
     const builder = new TableBuilder(payload, hidden);
     const table = builder.build();
     container.appendChild(table);
-    const eventBinder = new TableEventBinder(container);
-    eventBinder.bindAll();
+    if (!boundContainers.has(container)) {
+      const eventBinder = new TableEventBinder(container);
+      eventBinder.bindAll();
+      boundContainers.add(container);
+    }
     renderTabs();
     notifyInfo(`Query complete (${payload.rows.length} rows)`);
     initFiltersForNewResults();

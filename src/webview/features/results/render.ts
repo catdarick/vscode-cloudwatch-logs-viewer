@@ -15,6 +15,9 @@ function getTabResultsContainer(tabId: number): HTMLElement | null {
   return document.getElementById(`results-${tabId}`);
 }
 
+// Track which containers have event listeners bound to avoid duplicate bindings
+const boundContainers = new WeakSet<HTMLElement>();
+
 export function renderResults(payload: QueryResults, skipClearFilters = false, forceTabId?: number) {
   const s = getState();
   // Use forceTabId if provided (for tab switching), otherwise use activeTabId
@@ -53,9 +56,12 @@ export function renderResults(payload: QueryResults, skipClearFilters = false, f
   const table = builder.build();
   container.appendChild(table);
 
-  // Bind events using event binder
-  const eventBinder = new TableEventBinder(container);
-  eventBinder.bindAll();
+  // Bind events using event binder only if not already bound to this container
+  if (!boundContainers.has(container)) {
+    const eventBinder = new TableEventBinder(container);
+    eventBinder.bindAll();
+    boundContainers.add(container);
+  }
 
   // Update UI
   renderTabs();
