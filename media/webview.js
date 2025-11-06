@@ -2190,9 +2190,12 @@
   // src/webview/core/queryHandlers.ts
   function initQueryHandlers() {
     on("queryResult", (msg) => {
-      renderResults(msg.data);
-      initFiltersForNewResults();
-      scheduleSearchRerun();
+      const targetTabId = msg.tabId ?? getState().activeTabId;
+      if (targetTabId != null) {
+        renderResults(msg.data, false, targetTabId);
+        initFiltersForNewResults();
+        scheduleSearchRerun();
+      }
       renderTabs();
       const runButton = new RunButton();
       runButton.setIdle();
@@ -2200,7 +2203,7 @@
     on("queryError", (msg) => {
       notifyError(msg.error);
       const s = getState();
-      const targetTabId = s.activeTabId;
+      const targetTabId = msg.tabId ?? s.activeTabId;
       if (targetTabId != null) {
         setTabError(s, targetTabId, msg.error);
       }
@@ -2211,7 +2214,7 @@
     on("queryStatus", (msg) => {
       notifyInfo(msg.data.status);
       const s = getState();
-      const targetTabId = s.activeTabId;
+      const targetTabId = msg.tabId ?? s.activeTabId;
       if (targetTabId != null) {
         setTabStatus(s, targetTabId, msg.data.status);
       }
@@ -2583,7 +2586,7 @@
     renderTabs();
     const runButton = new RunButton();
     runButton.setRunning();
-    send({ type: "runQuery", data: { logGroups, region, query, startTime: range.start, endTime: range.end } });
+    send({ type: "runQuery", data: { logGroups, region, query, startTime: range.start, endTime: range.end, tabId: active.id } });
   }
   function initQueryButtons() {
     const runBtn = document.getElementById("runBtn");

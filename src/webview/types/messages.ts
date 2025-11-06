@@ -11,15 +11,15 @@ export type ExtensionToWebviewMessage =
   | { type: 'logGroupsList'; data: string[] }
   | { type: 'logGroupsListError'; error: string }
   | { type: 'favorites'; data: Favorite[] }
-  | { type: 'queryStatus'; data: { status: string } }
-  | { type: 'queryResult'; data: QueryResults }
-  | { type: 'queryError'; error: string }
+  | { type: 'queryStatus'; data: { status: string }; tabId?: number }
+  | { type: 'queryResult'; data: QueryResults; tabId?: number }
+  | { type: 'queryError'; error: string; tabId?: number }
   | { type: 'lastQuery'; query: string | undefined }
   | { type: 'toggleComment' };
 
 // Discriminated union for messages from webview -> extension
 export type WebviewToExtensionMessage =
-  | { type: 'runQuery'; data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number } }
+  | { type: 'runQuery'; data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number; tabId?: number } }
   | { type: 'abortQuery' }
   | { type: 'getSavedQueries'; region?: string }
   | { type: 'saveQuery'; data: { id: string; name: string; query: string; logGroups: string[] }; region?: string }

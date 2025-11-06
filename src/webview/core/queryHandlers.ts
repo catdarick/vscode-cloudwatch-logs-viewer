@@ -13,9 +13,13 @@ import { RunButton } from '../components/controls';
 
 export function initQueryHandlers() {
   on('queryResult', (msg) => {
-    renderResults(msg.data);
-    initFiltersForNewResults();
-    scheduleSearchRerun();
+    // Use the tabId from the message if available, otherwise fall back to active tab
+    const targetTabId = msg.tabId ?? getState().activeTabId;
+    if (targetTabId != null) {
+      renderResults(msg.data, false, targetTabId);
+      initFiltersForNewResults();
+      scheduleSearchRerun();
+    }
     
     // Update tab UI to show final results
     renderTabs();
@@ -28,8 +32,8 @@ export function initQueryHandlers() {
   on('queryError', (msg) => {
     notifyError(msg.error);
     const s = getState();
-    // Update the active tab with error
-    const targetTabId = s.activeTabId;
+    // Use the tabId from the message if available, otherwise fall back to active tab
+    const targetTabId = msg.tabId ?? s.activeTabId;
     if (targetTabId != null) {
       setTabError(s, targetTabId, msg.error);
     }
@@ -44,8 +48,8 @@ export function initQueryHandlers() {
   on('queryStatus', (msg) => {
     notifyInfo(msg.data.status);
     const s = getState();
-    // Update the active tab with status
-    const targetTabId = s.activeTabId;
+    // Use the tabId from the message if available, otherwise fall back to active tab
+    const targetTabId = msg.tabId ?? s.activeTabId;
     if (targetTabId != null) {
       setTabStatus(s, targetTabId, msg.data.status);
     }

@@ -69,7 +69,7 @@ export function runQuery() {
   const runButton = new RunButton();
   runButton.setRunning();
   
-  send({ type: 'runQuery', data: { logGroups, region, query, startTime: range.start, endTime: range.end } });
+  send({ type: 'runQuery', data: { logGroups, region, query, startTime: range.start, endTime: range.end, tabId: active.id } });
 }
 
 export function initQueryButtons() {

@@ -6,7 +6,7 @@ interface FavoriteLogGroup { name: string; region: string; }
 
 // Messages from webview -> extension
 type WebviewInMessage =
-  | { type: 'runQuery'; data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number } }
+  | { type: 'runQuery'; data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number; tabId?: number } }
   | { type: 'abortQuery' }
   | { type: 'getSavedQueries'; region?: string }
   | { type: 'saveQuery'; data: { id: string; name: string; query: string; logGroups: string[] }; region?: string }
@@ -24,9 +24,9 @@ type WebviewOutMessage =
   | { type: 'logGroupsList'; data: string[] }
   | { type: 'logGroupsListError'; error: string }
   | { type: 'favorites'; data: FavoriteLogGroup[] }
-  | { type: 'queryStatus'; data: { status: string } }
-  | { type: 'queryResult'; data: any }
-  | { type: 'queryError'; error: string }
+  | { type: 'queryStatus'; data: { status: string }; tabId?: number }
+  | { type: 'queryResult'; data: any; tabId?: number }
+  | { type: 'queryError'; error: string; tabId?: number }
   | { type: 'lastQuery'; query: string | undefined };
 
 const SAVED_KEY = 'cloudwatchLogsViewer.savedQueries';
@@ -194,18 +194,19 @@ function removeFavorite(context: vscode.ExtensionContext, name: string, region: 
   context.globalState.update(FAVORITES_KEY, getFavorites(context).filter(x => !(x.name === name && x.region === region)));
 }
 
-async function handleRunQuery(data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number }, _context: vscode.ExtensionContext) {
+async function handleRunQuery(data: { logGroups: string[]; region?: string; query: string; startTime: number; endTime: number; tabId?: number }, _context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration();
   const region = data.region || config.get('cloudwatchLogsViewer.defaultRegion') as string;
   const timeoutMs = config.get('cloudwatchLogsViewer.queryTimeoutMs') as number;
   const startTime = Math.floor(data.startTime / 1000);
   const endTime = Math.floor(data.endTime / 1000);
+  const tabId = data.tabId; // Capture the originating tab ID
   if (!data.logGroups?.length) {
-    post({ type: 'queryError', error: 'No log groups specified' });
+    post({ type: 'queryError', error: 'No log groups specified', tabId });
     return;
   }
   if (!data.query?.trim()) {
-    post({ type: 'queryError', error: 'Query string is empty' });
+    post({ type: 'queryError', error: 'Query string is empty', tabId });
     return;
   }
   try {
@@ -231,7 +232,7 @@ async function handleRunQuery(data: { logGroups: string[]; region?: string; quer
     if (augmentation.modified) {
       outputChannel?.appendLine('[info] @message field auto-injected (hidden from columns).');
     }
-    post({ type: 'queryStatus', data: { status: 'Running' } });
+    post({ type: 'queryStatus', data: { status: 'Running' }, tabId });
     const hiddenFields = augmentation.modified ? ['@ptr', '@message'] : ['@ptr'];
     const result = await runInsightsQuery({
       logGroupNames: data.logGroups,
@@ -243,12 +244,12 @@ async function handleRunQuery(data: { logGroups: string[]; region?: string; quer
       timeoutMs
     }, currentQueryAbortController.signal);
     // Attach hiddenFields metadata if we injected @message so webview can hide column but still show in detail
-    post({ type: 'queryResult', data: { ...result, hiddenFields } });
+    post({ type: 'queryResult', data: { ...result, hiddenFields }, tabId });
   } catch (err: any) {
     if (err?.name === 'AbortError' || /aborted/i.test(err?.message)) {
-      post({ type: 'queryStatus', data: { status: 'Aborted' } });
+      post({ type: 'queryStatus', data: { status: 'Aborted' }, tabId });
     } else {
-      post({ type: 'queryError', error: err.message || String(err) });
+      post({ type: 'queryError', error: err.message || String(err), tabId });
     }
   }
 }
