@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- A new Marketplace page: a README with screenshots, a clearer description and a smaller icon.
+
 ## 0.4.0
 
 Rewritten after the Grafana CloudWatch Logs app, still calling AWS directly.

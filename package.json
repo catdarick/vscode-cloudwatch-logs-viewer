@@ -2,7 +2,7 @@
   "name": "cloudwatch-logs-viewer",
   "displayName": "CloudWatch Logs Viewer",
   "description": "Query AWS CloudWatch Logs Insights in VS Code: autocomplete, the scan cost before you run, a histogram, column filters and the full JSON of every log.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "catdarick",
   "author": "catdarick",
   "repository": {
