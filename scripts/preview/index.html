@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<!--
+  The webview in a plain browser, with a fake extension host and VS Code's Dark+ (or ?theme=light)
+  colours. For looking at the UI without VS Code or AWS: `npm run build`, then serve the repository
+  root (python3 -m http.server 5178) and open http://localhost:5178/scripts/preview/.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CloudWatch Logs (preview)</title>
+  <link rel="stylesheet" href="../../dist/webview/webview.css" />
+  <style id="theme"></style>
+</head>
+<body>
+  <div id="root" data-worker="../../dist/webview/editor.worker.js"></div>
+  <script src="mockHost.js"></script>
+  <script src="../../dist/webview/webview.js"></script>
+</body>
+</html>

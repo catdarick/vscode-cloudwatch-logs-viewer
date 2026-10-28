@@ -1,8 +1,8 @@
 {
   "name": "cloudwatch-logs-viewer",
   "displayName": "CloudWatch Logs Viewer",
-  "description": "View and query AWS CloudWatch Logs Insights directly inside VS Code with time range selector, favorites and saved queries.",
-  "version": "0.3.3",
+  "description": "CloudWatch Logs Insights inside VS Code: tabs, favorite log groups, saved queries, a histogram, filters and a JSON view of every log.",
+  "version": "0.4.0",
   "publisher": "catdarick",
   "author": "catdarick",
   "repository": {
@@ -22,58 +22,80 @@
     "Other",
     "Visualization"
   ],
-  "keywords": ["aws", "cloudwatch", "logs", "insights", "observability", "monitoring"],
-  "activationEvents": [],
+  "keywords": [
+    "aws",
+    "cloudwatch",
+    "logs",
+    "insights",
+    "observability",
+    "monitoring"
+  ],
+  "activationEvents": [
+    "onUri",
+    "onWebviewPanel:cloudwatchLogsViewer"
+  ],
   "main": "dist/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "cloudwatchLogsViewer.open",
         "title": "CloudWatch Logs: Open Viewer"
-      },
-      {
-        "command": "cloudwatchLogsViewer.toggleComment",
-        "title": "CloudWatch Logs: Toggle Comment"
-      }
-    ],
-    "keybindings": [
-      {
-        "command": "cloudwatchLogsViewer.toggleComment",
-        "key": "ctrl+/",
-        "mac": "cmd+/",
-        "when": "cloudwatchLogsViewerFocus"
       }
     ],
     "configuration": {
       "title": "CloudWatch Logs Viewer",
       "properties": {
+        "cloudwatchLogsViewer.awsProfile": {
+          "type": "string",
+          "default": "",
+          "description": "AWS profile (from ~/.aws/config or ~/.aws/credentials) the viewer starts with. Empty: the default credential chain (AWS_PROFILE, environment variables, the default profile). It can be switched in the viewer's top bar."
+        },
         "cloudwatchLogsViewer.defaultRegion": {
           "type": "string",
-            "default": "us-east-2",
-            "description": "Default AWS region for CloudWatch Logs queries."
+          "default": "us-east-2",
+          "description": "Region for browsing log groups."
+        },
+        "cloudwatchLogsViewer.costPerGb": {
+          "type": "number",
+          "default": 0.005,
+          "minimum": 0,
+          "description": "USD per GB scanned, for the cost estimate next to each result (Logs Insights in us-east-1/us-east-2 is $0.005)."
         },
         "cloudwatchLogsViewer.queryTimeoutMs": {
           "type": "number",
-          "default": 60000,
-          "description": "Maximum time in milliseconds to wait for a query to complete before aborting."
+          "default": 1800000,
+          "minimum": 1000,
+          "description": "How long to wait for a query to finish, in milliseconds, before stopping it."
         }
       }
     }
   },
   "scripts": {
-    "compile": "tsc -p .",
-    "watch": "tsc -watch -p .",
-    "package": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node && esbuild src/webview/bootstrap.ts --bundle --outfile=media/webview.js --format=iife --platform=browser --log-level=info",
-    "lint": "eslint src --ext .ts"
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "package": "node scripts/build.mjs --production",
+    "vscode:prepublish": "npm run package",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && npm run package"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "@types/react": "^18.2.79",
+    "@types/react-dom": "^18.2.25",
     "@types/vscode": "^1.90.0",
-    "eslint": "^8.57.0",
+    "esbuild": "^0.24.2",
     "typescript": "^5.4.0",
-    "esbuild": "^0.21.4"
+    "vitest": "^2.1.9"
   },
   "dependencies": {
-    "@aws-sdk/client-cloudwatch-logs": "^3.614.0"
+    "@aws-sdk/client-cloudwatch-logs": "^3.614.0",
+    "@emotion/css": "^11.10.6",
+    "@floating-ui/react": "^0.26.9",
+    "@tanstack/react-virtual": "^3.14.13",
+    "monaco-editor": "^0.52.2",
+    "react": "^18.2.0",
+    "react-calendar": "^4.8.0",
+    "react-dom": "^18.2.0"
   }
 }

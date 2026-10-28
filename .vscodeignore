@@ -1,8 +1,9 @@
-**/tsconfig.json
-**/tsconfig.*.json
-**/.eslintrc.*
-**/.gitignore
-**/node_modules/@types/**
-**/src/**
-**/*.map
-out/**
+**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!media/icon.png
+!dist/extension.js
+!dist/webview/**
+dist/**/*.map
